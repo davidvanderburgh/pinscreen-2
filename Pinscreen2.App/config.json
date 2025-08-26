@@ -3,6 +3,7 @@
     "/Users/dvanderburgh/Movies"
   ],
   "ClockFormat": "HH:mm:ss",
-  "BalanceQueueByGame": true
+  "BalanceQueueByGame": true,
+  "LibVlcPath": "/Applications/VLC.app/Contents/MacOS/lib"
 }
 
