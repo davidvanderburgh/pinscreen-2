@@ -1,0 +1,22 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vlc="clr-namespace:LibVLCSharp.Avalonia;assembly=LibVLCSharp.Avalonia"
+        mc:Ignorable="d" d:DesignWidth="1280" d:DesignHeight="720"
+        x:Class="Pinscreen2.App.MainWindow"
+        Title="Pinscreen 2"
+        CanResize="True"
+        Background="#000000">
+    <Grid>
+        <vlc:VideoView Name="VideoView" />
+        <Border Background="#66000000" CornerRadius="6" Margin="16" HorizontalAlignment="Left" VerticalAlignment="Top">
+            <TextBlock Name="ClockText"
+                       Margin="8"
+                       Foreground="White"
+                       FontSize="48"
+                       FontWeight="Bold"
+                       Text="--:--:--" />
+        </Border>
+    </Grid>
+</Window>

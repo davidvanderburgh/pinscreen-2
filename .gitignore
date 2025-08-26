@@ -1,0 +1,43 @@
+# Build artifacts
+bin/
+obj/
+
+# Rider/VS/VSCode
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+
+# Dotnet
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Avalonia designer cache
+.avalonia/
+
+# Local config/runtime
+Pinscreen2.App/bin/
+Pinscreen2.App/obj/
+Pinscreen2.App/*.user
+Pinscreen2.App/*.local.json
+Pinscreen2.App/*.runtimeconfig.json
+Pinscreen2.App/*.deps.json
+
+# Publish outputs
+**/publish/
+
+
