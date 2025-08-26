@@ -19,7 +19,10 @@ LibVLCSharp loads VLC's native libraries from your system install.
 cd /Users/dvanderburgh/development/pinscreen-2
 # (Optional) edit config first
 open Pinscreen2.App/config.json
-# Run
+# macOS: run via helper (sets VLC env vars automatically)
+./run-macos.sh
+
+# Windows/Linux: run directly
 dotnet run --project Pinscreen2.App
 ```
 
@@ -77,6 +80,13 @@ Artifacts are under `Pinscreen2.App/bin/Release/<tfm>/<rid>/publish/`.
 
 ## Notes
 
+- macOS: the dynamic loader must know VLC's library locations at process start. Use `./run-macos.sh` which sets `DYLD_LIBRARY_PATH` and `VLC_PLUGIN_PATH` based on your VLC install or `LibVlcPath` in `Pinscreen2.App/config.json`.
+- If you prefer manual run on macOS:
+```bash
+DYLD_LIBRARY_PATH=/Applications/VLC.app/Contents/MacOS/lib \
+VLC_PLUGIN_PATH=/Applications/VLC.app/Contents/MacOS/plugins \
+dotnet run --project Pinscreen2.App
+```
 - If playback fails with "libvlc" not found, ensure VLC is installed and on the default path (e.g., `/Applications/VLC.app` on macOS). Installing via Homebrew cask usually resolves it.
 - The queue rebuilds automatically when it reaches the end.
 

@@ -31,6 +31,7 @@ public partial class MainWindow : Window
         var libVlcPath = GetLibVlcDirectory();
         if (!string.IsNullOrWhiteSpace(libVlcPath))
         {
+            SetPlatformLibraryEnv(libVlcPath);
             SetVlcPluginPath(libVlcPath);
             Core.Initialize(libVlcPath);
         }
@@ -52,6 +53,40 @@ public partial class MainWindow : Window
         _mediaPlayer.EndReached += (_, __) => Dispatcher.UIThread.Post(PlayNext);
 
         PlayNext();
+    }
+
+    private static void SetPlatformLibraryEnv(string libVlcDirectory)
+    {
+        try
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                // Ensure the dynamic loader can resolve libvlc*.dylib
+                var existing = Environment.GetEnvironmentVariable("DYLD_LIBRARY_PATH") ?? string.Empty;
+                var combined = string.IsNullOrEmpty(existing)
+                    ? libVlcDirectory
+                    : libVlcDirectory + System.IO.Path.PathSeparator + existing;
+                Environment.SetEnvironmentVariable("DYLD_LIBRARY_PATH", combined);
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                var existing = Environment.GetEnvironmentVariable("LD_LIBRARY_PATH") ?? string.Empty;
+                var combined = string.IsNullOrEmpty(existing)
+                    ? libVlcDirectory
+                    : libVlcDirectory + System.IO.Path.PathSeparator + existing;
+                Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", combined);
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                // Prepend to PATH so libvlc.dll can be found
+                var existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+                var combined = string.IsNullOrEmpty(existing)
+                    ? libVlcDirectory
+                    : libVlcDirectory + ";" + existing;
+                Environment.SetEnvironmentVariable("PATH", combined);
+            }
+        }
+        catch { /* best effort */ }
     }
 
     private static void SetVlcPluginPath(string libVlcDirectory)
