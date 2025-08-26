@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
+using Avalonia.Interactivity;
 
 namespace Pinscreen2.App;
 
@@ -20,12 +21,28 @@ public partial class MainWindow : Window
     private readonly Queue<string> _playlist = new Queue<string>();
     private string _currentItem = string.Empty;
     private AppConfig _config = new AppConfig();
+    // Expose config for overlay window
+    public AppConfig Config => _config;
+
+    // Public wrappers for overlay window actions
+    public void PlayPauseCommand() => OnPlayPauseClicked(this, new Avalonia.Interactivity.RoutedEventArgs());
+    public void NextCommand() => OnNextClicked(this, new Avalonia.Interactivity.RoutedEventArgs());
+    public void RebuildQueueCommand() => OnRebuildQueueClicked(this, new Avalonia.Interactivity.RoutedEventArgs());
+    public void OpenConfigCommand() => OnOpenConfigClicked(this, new Avalonia.Interactivity.RoutedEventArgs());
+    public void OpenCurrentFolderCommand() => OnOpenCurrentFolderClicked(this, new Avalonia.Interactivity.RoutedEventArgs());
+    public void SetMediaFolderCommand() => OnSetMediaFolderClicked(this, new Avalonia.Interactivity.RoutedEventArgs());
+    public void QuitCommand() => OnQuitClicked(this, new Avalonia.Interactivity.RoutedEventArgs());
+    //
 
     public MainWindow()
     {
         InitializeComponent();
         InitializeAsync();
         this.KeyDown += OnKeyDown;
+        // Ensure we receive click/tap anywhere (even if child controls mark handled)
+        AddHandler(InputElement.PointerPressedEvent, OnRootPointerPressed,
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
+        // No special positioning needed; clock is a centered popup
     }
 
     private async void InitializeAsync()
@@ -45,16 +62,47 @@ public partial class MainWindow : Window
         SetupClock();
         await BuildPlaylistAsync();
 
-        // Try with explicit plugin path option when available
-        var options = new List<string> { "--verbose=2" };
-
-        _libVlc = new LibVLC(options.ToArray());
-        _libVlc.Log += (_, e) => Console.WriteLine($"libvlc[{e.Level}]: {e.Message}");
+        // Initialize LibVLC with software decode; let VideoView callbacks choose vout
+        _libVlc = new LibVLC(new[] { "--vout=opengl", "--avcodec-hw=none", "--no-video-title-show" });
         _mediaPlayer = new MediaPlayer(_libVlc);
-        VideoView.MediaPlayer = _mediaPlayer;
-        _mediaPlayer.EndReached += (_, __) => Dispatcher.UIThread.Post(PlayNext);
+        _mediaPlayer.EncounteredError += (_, __) => Dispatcher.UIThread.Post(PlayNext);
 
-        PlayNext();
+        // Disable VLC marquee to avoid conflicting clock overlays
+        try { _mediaPlayer.SetMarqueeInt(VideoMarqueeOption.Enable, 0); } catch { }
+
+        // Defer attaching the MediaPlayer until the VideoView is attached and sized
+        VideoView.AttachedToVisualTree += (_, __) =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_mediaPlayer == null) return;
+                if (VideoView.MediaPlayer == null && VideoView.Bounds.Width > 0 && VideoView.Bounds.Height > 0)
+                {
+                    VideoView.MediaPlayer = _mediaPlayer;
+                    _mediaPlayer.EndReached += (_, __) => Dispatcher.UIThread.Post(PlayNext);
+                    // Ensure overlay is hidden so VideoView is visible
+                    try { if (OverlayBackdrop != null) OverlayBackdrop.IsVisible = false; } catch { }
+                    PlayNext();
+                }
+            }, DispatcherPriority.Render);
+        };
+
+        // If already visible, try immediate attach
+        if (_mediaPlayer != null && VideoView.IsEffectivelyVisible && VideoView.MediaPlayer == null)
+        {
+            VideoView.MediaPlayer = _mediaPlayer;
+            _mediaPlayer.EndReached += (_, __) => Dispatcher.UIThread.Post(PlayNext);
+            try { if (OverlayBackdrop != null) OverlayBackdrop.IsVisible = false; } catch { }
+            PlayNext();
+        }
+
+        // Launch floating overlay window to guarantee clock/overlay above native video
+        try
+        {
+            var overlay = new OverlayWindow(this);
+            overlay.Show();
+        }
+        catch { }
     }
 
     private void ToggleOverlay(bool? force = null)
@@ -66,8 +114,9 @@ public partial class MainWindow : Window
 
     private void OnRootPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (!e.Handled)
-            ToggleOverlay();
+        // Defer to avoid same-event close/open issues
+        e.Handled = true;
+        Dispatcher.UIThread.Post(() => ToggleOverlay(), DispatcherPriority.Background);
     }
 
     private void OnOverlayBackdropPressed(object? sender, PointerPressedEventArgs e)
@@ -345,29 +394,44 @@ public partial class MainWindow : Window
 
     private void UpdateClock()
     {
-        ClockText.Text = DateTime.Now.ToString(_config.ClockFormat);
+        var now = DateTime.Now.ToString(_config.ClockFormat);
+        ClockText.Text = now;
     }
 
     private async Task BuildPlaylistAsync()
     {
-        _playlist.Clear();
-        foreach (var folder in _config.MediaFolders)
-        {
-            if (!Directory.Exists(folder)) continue;
-            var files = Directory.EnumerateFiles(folder, "*.*", SearchOption.AllDirectories)
-                                 .Where(f => HasVideoExtension(f));
-            foreach (var file in files)
-            {
-                _playlist.Enqueue(file);
-            }
-        }
+        var folders = _config.MediaFolders.ToList();
+        var collected = new List<string>();
+        int totalFound = 0;
 
+        await Task.Run(() =>
+        {
+            foreach (var folder in folders)
+            {
+                var resolved = ResolveFolderPath(folder);
+                if (string.IsNullOrWhiteSpace(resolved) || !Directory.Exists(resolved))
+                {
+                    Console.WriteLine($"Scan skip: folder not found -> '{folder}' (resolved='{resolved}')");
+                    continue;
+                }
+                Console.WriteLine($"Scanning: {resolved}");
+
+                foreach (var file in EnumerateVideoFilesSafe(resolved))
+                {
+                    collected.Add(file);
+                    totalFound++;
+                }
+            }
+        });
+
+        IEnumerable<string> finalOrder = collected;
         if (_config.BalanceQueueByGame)
         {
             // Simple grouping by immediate parent folder name
-            var groups = _playlist.GroupBy(p => new DirectoryInfo(Path.GetDirectoryName(p) ?? string.Empty).Name)
-                                   .Select(g => new Queue<string>(g));
-            _playlist.Clear();
+            var groups = collected.GroupBy(p => new DirectoryInfo(Path.GetDirectoryName(p) ?? string.Empty).Name)
+                                  .Select(g => new Queue<string>(g))
+                                  .ToList();
+            var interleaved = new List<string>();
             bool added;
             do
             {
@@ -376,21 +440,85 @@ public partial class MainWindow : Window
                 {
                     if (g.Count > 0)
                     {
-                        _playlist.Enqueue(g.Dequeue());
+                        interleaved.Add(g.Dequeue());
                         added = true;
                     }
                 }
             } while (added);
+            finalOrder = interleaved;
         }
 
+        _playlist.Clear();
+        foreach (var f in finalOrder)
+            _playlist.Enqueue(f);
+
+        Console.WriteLine($"Scan complete: {_playlist.Count} files queued (found {totalFound})");
         UpdateStatus();
-        await Task.CompletedTask;
+    }
+
+    private static IEnumerable<string> EnumerateVideoFilesSafe(string root)
+    {
+        var stack = new Stack<string>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var dir = stack.Pop();
+            IEnumerable<string> subdirs = Array.Empty<string>();
+            try
+            {
+                subdirs = Directory.EnumerateDirectories(dir);
+            }
+            catch { }
+            foreach (var sd in subdirs)
+            {
+                stack.Push(sd);
+            }
+
+            IEnumerable<string> files = Array.Empty<string>();
+            try
+            {
+                files = Directory.EnumerateFiles(dir);
+            }
+            catch { }
+            foreach (var f in files)
+            {
+                if (HasVideoExtension(f))
+                    yield return f;
+            }
+        }
+    }
+
+    private static string ResolveFolderPath(string configuredPath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(configuredPath)) return string.Empty;
+
+            // Expand '~' (macOS/Linux)
+            var expanded = configuredPath.StartsWith("~")
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), configuredPath.TrimStart('~').TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                : configuredPath;
+
+            // Absolute path as-is
+            if (Path.IsPathRooted(expanded) && Directory.Exists(expanded)) return expanded;
+
+            // Relative to current working directory
+            var cwdCandidate = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, expanded));
+            if (Directory.Exists(cwdCandidate)) return cwdCandidate;
+
+            // Relative to app base directory (where config.json is copied)
+            var baseCandidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, expanded));
+            if (Directory.Exists(baseCandidate)) return baseCandidate;
+        }
+        catch { }
+
+        return configuredPath;
     }
 
     private static bool HasVideoExtension(string path)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext is ".mp4" or ".mov" or ".m4v" or ".mkv" or ".avi";
+        return ext is ".mp4" or ".mov" or ".m4v" or ".mkv" or ".avi" or ".webm";
     }
 
     private void PlayNext()
@@ -399,17 +527,24 @@ public partial class MainWindow : Window
 
         if (_playlist.Count == 0)
         {
-            _ = BuildPlaylistAsync().ContinueWith(_ => Dispatcher.UIThread.Post(PlayNext));
+            _ = BuildPlaylistAsync().ContinueWith(_ =>
+            {
+                if (_playlist.Count > 0)
+                    Dispatcher.UIThread.Post(PlayNext);
+                else
+                    Dispatcher.UIThread.Post(UpdateStatus);
+            });
             return;
         }
 
         _currentItem = _playlist.Dequeue();
-        using var media = new Media(_libVlc, new Uri(_currentItem));
-        _mediaPlayer.Media = media;
-        _mediaPlayer.Play();
+        var media = new Media(_libVlc, _currentItem, FromType.FromPath);
+        _mediaPlayer.Play(media);
 
         UpdateStatus();
     }
+
+    // No VLC marquee positioning; Avalonia clock overlay only
 
     private void UpdateStatus()
     {
