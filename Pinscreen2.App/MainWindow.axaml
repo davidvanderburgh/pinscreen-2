@@ -47,6 +47,7 @@
                         <Button Margin="0,0,8,8" Click="OnOpenCurrentFolderClicked">Open Current Folder</Button>
                         <Button Margin="0,0,8,8" Click="OnQuitClicked">Quit</Button>
                     </WrapPanel>
+                    <TextBlock Name="StatusText" Foreground="#CCCCCC"/>
                     <TextBlock Text="Tip: click anywhere to toggle this overlay. Press Esc to close." Foreground="#CCCCCC"/>
                 </StackPanel>
             </Border>

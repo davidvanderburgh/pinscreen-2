@@ -383,6 +383,7 @@ public partial class MainWindow : Window
             } while (added);
         }
 
+        UpdateStatus();
         await Task.CompletedTask;
     }
 
@@ -406,6 +407,20 @@ public partial class MainWindow : Window
         using var media = new Media(_libVlc, new Uri(_currentItem));
         _mediaPlayer.Media = media;
         _mediaPlayer.Play();
+
+        UpdateStatus();
+    }
+
+    private void UpdateStatus()
+    {
+        try
+        {
+            var status = this.FindControl<TextBlock>("StatusText");
+            if (status == null) return;
+            var firstFolder = _config.MediaFolders.FirstOrDefault() ?? "(none)";
+            status.Text = $"Folder: {firstFolder}   Queue: {_playlist.Count}   Now: {Path.GetFileName(_currentItem)}";
+        }
+        catch { }
     }
 }
 
