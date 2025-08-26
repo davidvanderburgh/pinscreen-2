@@ -10,12 +10,15 @@
         Background="#000000">
     <Grid PointerPressed="OnRootPointerPressed">
         <vlc:VideoView Name="VideoView" />
-        <Border Background="#66000000" CornerRadius="6" Margin="16" HorizontalAlignment="Left" VerticalAlignment="Top">
+        <Border Background="#66000000" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="0">
             <TextBlock Name="ClockText"
-                       Margin="8"
+                       Margin="16"
                        Foreground="White"
-                       FontSize="48"
+                       FontSize="72"
                        FontWeight="Bold"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       TextAlignment="Center"
                        Text="--:--:--" />
         </Border>
 

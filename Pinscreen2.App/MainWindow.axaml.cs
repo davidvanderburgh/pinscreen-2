@@ -155,6 +155,8 @@ public partial class MainWindow : Window
                 SaveConfig();
                 await BuildPlaylistAsync();
                 ToggleOverlay(false);
+                // Auto-play immediately
+                PlayNext();
             }
         }
         catch { }
