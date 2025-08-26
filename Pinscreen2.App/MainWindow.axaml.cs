@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Threading;
 using LibVLCSharp.Shared;
 using System;
@@ -24,6 +25,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         InitializeAsync();
+        this.KeyDown += OnKeyDown;
     }
 
     private async void InitializeAsync()
@@ -55,6 +57,134 @@ public partial class MainWindow : Window
         PlayNext();
     }
 
+    private void ToggleOverlay(bool? force = null)
+    {
+        if (OverlayBackdrop == null) return;
+        var newState = force ?? !OverlayBackdrop.IsVisible;
+        OverlayBackdrop.IsVisible = newState;
+    }
+
+    private void OnRootPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.Handled)
+            ToggleOverlay();
+    }
+
+    private void OnOverlayBackdropPressed(object? sender, PointerPressedEventArgs e)
+    {
+        // Clicking backdrop closes overlay
+        ToggleOverlay(force: false);
+        e.Handled = true;
+    }
+
+    private void OnOverlayPanelPressed(object? sender, PointerPressedEventArgs e)
+    {
+        // Prevent backdrop handler from closing when interacting inside panel
+        e.Handled = true;
+    }
+
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            ToggleOverlay(force: false);
+        }
+    }
+
+    private void OnPlayPauseClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_mediaPlayer == null) return;
+        if (_mediaPlayer.IsPlaying)
+            _mediaPlayer.Pause();
+        else
+            _mediaPlayer.Play();
+    }
+
+    private void OnNextClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        PlayNext();
+    }
+
+    private void OnRebuildQueueClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _ = BuildPlaylistAsync();
+    }
+
+    private void OnOpenConfigClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "config.json");
+            if (File.Exists(path))
+            {
+                OpenWithOS(path);
+            }
+        }
+        catch { }
+    }
+
+    private void OnOpenCurrentFolderClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(_currentItem))
+            {
+                var folder = Path.GetDirectoryName(_currentItem);
+                if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
+                {
+                    OpenWithOS(folder);
+                }
+            }
+        }
+        catch { }
+    }
+
+    private async void OnSetMediaFolderClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            var dialog = new OpenFolderDialog
+            {
+                Title = "Select Media Folder"
+            };
+            var selected = await dialog.ShowAsync(this);
+            if (!string.IsNullOrWhiteSpace(selected))
+            {
+                // Update config with single folder for simplicity; extend to multi-select later if needed
+                _config.MediaFolders = new List<string> { selected };
+                SaveConfig();
+                await BuildPlaylistAsync();
+                ToggleOverlay(false);
+            }
+        }
+        catch { }
+    }
+
+    private void SaveConfig()
+    {
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "config.json");
+            var json = JsonSerializer.Serialize(_config, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(path, json);
+        }
+        catch { }
+    }
+
+    private static void OpenWithOS(string path)
+    {
+        if (OperatingSystem.IsMacOS())
+            System.Diagnostics.Process.Start("open", $"\"{path}\"");
+        else if (OperatingSystem.IsWindows())
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer", $"\"{path}\"") { UseShellExecute = true });
+        else
+            System.Diagnostics.Process.Start("xdg-open", $"\"{path}\"");
+    }
+
+    private void OnQuitClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        Close();
+    }
     private static void SetPlatformLibraryEnv(string libVlcDirectory)
     {
         try

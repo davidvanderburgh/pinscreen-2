@@ -8,7 +8,7 @@
         Title="Pinscreen 2"
         CanResize="True"
         Background="#000000">
-    <Grid>
+    <Grid PointerPressed="OnRootPointerPressed">
         <vlc:VideoView Name="VideoView" />
         <Border Background="#66000000" CornerRadius="6" Margin="16" HorizontalAlignment="Left" VerticalAlignment="Top">
             <TextBlock Name="ClockText"
@@ -17,6 +17,36 @@
                        FontSize="48"
                        FontWeight="Bold"
                        Text="--:--:--" />
+        </Border>
+
+        <!-- Overlay -->
+        <Border Name="OverlayBackdrop"
+                Background="#80000000"
+                IsVisible="False"
+                PointerPressed="OnOverlayBackdropPressed">
+            <Border Name="OverlayPanel"
+                    Background="#222222"
+                    CornerRadius="8"
+                    Padding="16"
+                    MaxWidth="520"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    PointerPressed="OnOverlayPanelPressed">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Pinscreen Options" FontSize="24" Foreground="White"/>
+                    <Separator/>
+                    <WrapPanel>
+                        <Button Name="BtnPlayPause" Margin="0,0,8,8" Click="OnPlayPauseClicked">Play/Pause</Button>
+                        <Button Margin="0,0,8,8" Click="OnNextClicked">Next</Button>
+                        <Button Margin="0,0,8,8" Click="OnRebuildQueueClicked">Rebuild Queue</Button>
+                        <Button Margin="0,0,8,8" Click="OnSetMediaFolderClicked">Set Media Folder…</Button>
+                        <Button Margin="0,0,8,8" Click="OnOpenConfigClicked">Open Config</Button>
+                        <Button Margin="0,0,8,8" Click="OnOpenCurrentFolderClicked">Open Current Folder</Button>
+                        <Button Margin="0,0,8,8" Click="OnQuitClicked">Quit</Button>
+                    </WrapPanel>
+                    <TextBlock Text="Tip: click anywhere to toggle this overlay. Press Esc to close." Foreground="#CCCCCC"/>
+                </StackPanel>
+            </Border>
         </Border>
     </Grid>
 </Window>
