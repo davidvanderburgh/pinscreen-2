@@ -89,6 +89,10 @@
                                 </ComboBox>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock Text="24-hour time:" Foreground="#CCCCCC" VerticalAlignment="Center"/>
+                                <CheckBox Name="Clock24hCheck" Checked="OnClockFormatChecked" Unchecked="OnClockFormatUnchecked"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock Text="Clock Size:" Foreground="#CCCCCC" VerticalAlignment="Center"/>
                                 <Slider Name="ClockSizeSlider" Minimum="24" Maximum="200" Width="240" ValueChanged="OnClockSizeChanged"/>
                                 <TextBlock Name="ClockSizeValueText" Foreground="#CCCCCC" VerticalAlignment="Center"/>

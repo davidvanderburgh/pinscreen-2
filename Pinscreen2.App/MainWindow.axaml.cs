@@ -171,6 +171,7 @@ public partial class MainWindow : Window
         {
             var fontCombo = this.FindControl<ComboBox>("ClockFontCombo");
             var colorCombo = this.FindControl<ComboBox>("ClockColorCombo");
+            var clock24hCheck = this.FindControl<CheckBox>("Clock24hCheck");
             var sizeSlider = this.FindControl<Slider>("ClockSizeSlider");
             var sizeValueText = this.FindControl<TextBlock>("ClockSizeValueText");
             var delaySlider = this.FindControl<Slider>("DelaySlider");
@@ -209,6 +210,11 @@ public partial class MainWindow : Window
                         break;
                     }
                 }
+            }
+            if (clock24hCheck != null)
+            {
+                var is24 = (_config.ClockFormat ?? "HH:mm:ss").Contains('H');
+                clock24hCheck.IsChecked = is24;
             }
             if (sizeSlider != null)
             {
@@ -1092,6 +1098,30 @@ public partial class MainWindow : Window
                     catch { }
                 }
             }
+        }
+        catch { }
+    }
+
+    private void OnClockFormatChecked(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_isInitializingUi) return;
+            _config.ClockFormat = "HH:mm:ss"; // 24h
+            SaveConfig();
+            UpdateClock();
+        }
+        catch { }
+    }
+
+    private void OnClockFormatUnchecked(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_isInitializingUi) return;
+            _config.ClockFormat = "hh:mm:ss tt"; // 12h with AM/PM
+            SaveConfig();
+            UpdateClock();
         }
         catch { }
     }
