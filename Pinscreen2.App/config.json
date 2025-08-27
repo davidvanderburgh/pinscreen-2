@@ -1,9 +1,0 @@
-{
-  "MediaFolders": [
-    "videos"
-  ],
-  "ClockFormat": "HH:mm:ss",
-  "BalanceQueueByGame": true,
-  "LibVlcPath": "C:\\Program Files\\VideoLAN\\VLC"
-}
-

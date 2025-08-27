@@ -36,6 +36,8 @@ public partial class MainWindow : Window
     private string _clockColorHex = "#FFFFFFFF";
     private int _delaySeconds = 3;
     private bool _libVlcInitFailed = false;
+    private bool _isInitializingUi = true;
+    private string _effectiveConfigPath = string.Empty;
     // Expose config for overlay window
     public AppConfig Config => _config;
 
@@ -90,6 +92,7 @@ public partial class MainWindow : Window
         _clockYPercent = Math.Clamp(_config.ClockYPercent, 0, 100);
         _clockColorHex = string.IsNullOrWhiteSpace(_config.ClockColor) ? _clockColorHex : _config.ClockColor;
         _delaySeconds = Math.Clamp(_config.DelaySeconds, 0, 10);
+        _isInitializingUi = false; // prevent UI event handlers from saving during initial layout
         SetupClock();
         this.AttachedToVisualTree += (_, __) =>
         {
@@ -163,6 +166,8 @@ public partial class MainWindow : Window
         {
             var fontCombo = this.FindControl<ComboBox>("ClockFontCombo");
             var colorCombo = this.FindControl<ComboBox>("ClockColorCombo");
+            var sizeSlider = this.FindControl<Slider>("ClockSizeSlider");
+            var sizeValueText = this.FindControl<TextBlock>("ClockSizeValueText");
             var delaySlider = this.FindControl<Slider>("DelaySlider");
             var delayValueText = this.FindControl<TextBlock>("DelayValueText");
             if (fontCombo == null) return;
@@ -199,6 +204,12 @@ public partial class MainWindow : Window
                         break;
                     }
                 }
+            }
+            if (sizeSlider != null)
+            {
+                sizeSlider.Value = Math.Clamp(_config.ClockFontSize, 24, 200);
+                if (sizeValueText != null)
+                    sizeValueText.Text = $"{(int)sizeSlider.Value}px";
             }
             if (delaySlider != null)
             {
@@ -296,7 +307,9 @@ public partial class MainWindow : Window
     {
         try
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "config.json");
+            var path = GetUserConfigFilePath();
+            // Ensure file exists so the OS open command works
+            if (!File.Exists(path)) SaveConfig();
             if (File.Exists(path))
             {
                 OpenWithOS(path);
@@ -385,9 +398,12 @@ public partial class MainWindow : Window
     {
         try
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "config.json");
+            var path = GetUserConfigFilePath();
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             var json = JsonSerializer.Serialize(_config, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(path, json);
+            _effectiveConfigPath = path;
         }
         catch { }
     }
@@ -494,17 +510,34 @@ public partial class MainWindow : Window
     {
         try
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "config.json");
+            var path = GetEffectiveConfigFilePath();
+            _effectiveConfigPath = path;
             if (File.Exists(path))
             {
                 var json = File.ReadAllText(path);
-                _config = JsonSerializer.Deserialize<AppConfig>(json) ?? new AppConfig();
-                NormalizeConfigForCurrentOS(_config);
+                try
+                {
+                    var readOptions = new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                        ReadCommentHandling = JsonCommentHandling.Skip,
+                        AllowTrailingCommas = true
+                    };
+                    _config = JsonSerializer.Deserialize<AppConfig>(json, readOptions) ?? new AppConfig();
+                }
+                catch
+                {
+                    // Keep defaults if parse fails; do not overwrite user's file here
+                    _config = new AppConfig();
+                }
+                // Do not modify or save here; respect user's file exactly as-is
             }
             else
             {
                 _config = new AppConfig();
-                NormalizeConfigForCurrentOS(_config);
+                // First run: create user config with defaults
+                SaveConfig();
+                _effectiveConfigPath = GetUserConfigFilePath();
             }
         }
         catch { /* fallback to defaults */ }
@@ -512,48 +545,29 @@ public partial class MainWindow : Window
 
     private static void NormalizeConfigForCurrentOS(AppConfig config)
     {
+        // Avoid mutating user-provided values on load. Only apply minimal safety defaults
+        // for missing fields without overriding provided ones.
         try
         {
-            // Media folders: remove obvious non-existent platform-specific defaults
-            if (config.MediaFolders == null || config.MediaFolders.Count == 0)
+            if (config.MediaFolders == null)
             {
-                config.MediaFolders = new List<string> { Environment.GetFolderPath(Environment.SpecialFolder.MyVideos) };
+                config.MediaFolders = new List<string>();
             }
-            else
+            if (config.MediaFolders.Count == 0)
             {
-                var normalized = new List<string>();
-                foreach (var f in config.MediaFolders)
-                {
-                    if (string.IsNullOrWhiteSpace(f)) continue;
-                    var resolved = ResolveFolderPath(f);
-                    if (Directory.Exists(resolved))
-                    {
-                        normalized.Add(resolved);
-                    }
-                }
-                if (normalized.Count == 0)
-                {
-                    normalized.Add(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos));
-                }
-                config.MediaFolders = normalized.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                var fallback = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
+                if (!string.IsNullOrWhiteSpace(fallback))
+                    config.MediaFolders.Add(fallback);
             }
-
-            // LibVLC path: if configured but not valid on this OS, clear it
-            if (!string.IsNullOrWhiteSpace(config.LibVlcPath))
-            {
-                try
-                {
-                    var libName = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "libvlc.dylib"
-                        : RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "libvlc.dll"
-                        : "libvlc.so";
-                    var lib = Path.Combine(config.LibVlcPath, libName);
-                    if (!Directory.Exists(config.LibVlcPath) || !File.Exists(lib))
-                    {
-                        config.LibVlcPath = string.Empty;
-                    }
-                }
-                catch { config.LibVlcPath = string.Empty; }
-            }
+            if (string.IsNullOrWhiteSpace(config.ClockFormat))
+                config.ClockFormat = "HH:mm:ss";
+            if (string.IsNullOrWhiteSpace(config.ClockColor))
+                config.ClockColor = "#FFFFFFFF";
+            if (config.ClockFontSize <= 0)
+                config.ClockFontSize = 72.0;
+            if (config.DelaySeconds < 0)
+                config.DelaySeconds = 0;
+            // Do not clear LibVlcPath automatically; respect user value even if path missing at load
         }
         catch { }
     }
@@ -564,8 +578,11 @@ public partial class MainWindow : Window
         {
             // If user configured a path, prefer it
             // Note: Cannot access instance field here; rely on config file directly
-            var configPath = Path.Combine(AppContext.BaseDirectory, "config.json");
-            if (File.Exists(configPath))
+            var configPathUser = GetUserConfigFilePath();
+            var configPathApp = Path.Combine(AppContext.BaseDirectory, "config.json");
+            var tryPaths = new[] { configPathUser, configPathApp };
+            var configPath = tryPaths.FirstOrDefault(File.Exists);
+            if (!string.IsNullOrEmpty(configPath) && File.Exists(configPath))
             {
                 var json = File.ReadAllText(configPath);
                 var cfg = JsonSerializer.Deserialize<AppConfig>(json);
@@ -658,6 +675,44 @@ public partial class MainWindow : Window
         return string.Empty; // fall back to default resolution
     }
 
+    private static string GetConfigDirectory()
+    {
+        try
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pinscreen2");
+                return dir;
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                // On macOS, ApplicationData resolves to ~/Library/Application Support
+                var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Pinscreen2");
+                return dir;
+            }
+            else
+            {
+                var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Pinscreen2");
+                return dir;
+            }
+        }
+        catch { }
+        return AppContext.BaseDirectory;
+    }
+
+    private static string GetUserConfigFilePath()
+    {
+        return Path.Combine(GetConfigDirectory(), "config.json");
+    }
+
+    private static string GetEffectiveConfigFilePath()
+    {
+        var user = GetUserConfigFilePath();
+        if (File.Exists(user)) return user;
+        var app = Path.Combine(AppContext.BaseDirectory, "config.json");
+        return File.Exists(app) ? app : user;
+    }
+
     private void SetupClock()
     {
         _clockTimer.Interval = TimeSpan.FromSeconds(1);
@@ -673,6 +728,8 @@ public partial class MainWindow : Window
         {
             if (ClockText != null)
             {
+                // Apply font size
+                try { ClockText.FontSize = Math.Clamp(_config.ClockFontSize, 24, 200); } catch { }
                 if (!string.IsNullOrWhiteSpace(_config.ClockFontFamily))
                 {
                     try { ApplyClockFontSafely(_config.ClockFontFamily); } catch { }
@@ -716,6 +773,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (_isInitializingUi) return;
             if (sender is ComboBox combo)
             {
                 var fileName = combo.SelectedItem as string;
@@ -736,6 +794,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (_isInitializingUi) return;
             if (sender is ComboBox combo)
             {
                 var item = combo.SelectedItem as ComboBoxItem;
@@ -761,12 +820,33 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (_isInitializingUi) return;
             _delaySeconds = (int)Math.Round(Math.Clamp(e.NewValue, 0, 10));
             _config.DelaySeconds = _delaySeconds;
             SaveConfig();
             var delayValueText = this.FindControl<TextBlock>("DelayValueText");
             if (delayValueText != null)
                 delayValueText.Text = $"{_delaySeconds}s";
+        }
+        catch { }
+    }
+
+    private void OnClockSizeChanged(object? sender, RangeBaseValueChangedEventArgs e)
+    {
+        try
+        {
+            if (_isInitializingUi) return;
+            var newSize = Math.Clamp(e.NewValue, 24, 200);
+            _config.ClockFontSize = newSize;
+            SaveConfig();
+            if (ClockText != null)
+            {
+                try { ClockText.FontSize = newSize; } catch { }
+                UpdateClock();
+            }
+            var sizeValueText = this.FindControl<TextBlock>("ClockSizeValueText");
+            if (sizeValueText != null)
+                sizeValueText.Text = $"{(int)newSize}px";
         }
         catch { }
     }
@@ -1067,7 +1147,8 @@ public partial class MainWindow : Window
             if (status == null) return;
             var firstFolder = _config.MediaFolders.FirstOrDefault() ?? "(none)";
             var vlcStatus = _libVlcInitFailed ? "VLC: missing" : (_libVlc == null ? "VLC: not ready" : "VLC: ok");
-            status.Text = $"Folder: {firstFolder}   Queue: {_playlist.Count}   Now: {Path.GetFileName(_currentItem)}   {vlcStatus}";
+            var cfgSrc = (!string.IsNullOrWhiteSpace(_effectiveConfigPath) && _effectiveConfigPath.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase)) ? "cfg:app" : "cfg:user";
+            status.Text = $"Folder: {firstFolder}   Queue: {_playlist.Count}   Now: {Path.GetFileName(_currentItem)}   {vlcStatus}   {cfgSrc}";
         }
         catch { }
     }
@@ -1084,4 +1165,5 @@ public class AppConfig
     public string ClockFontFamily { get; set; } = string.Empty; // file path or family name
     public string ClockColor { get; set; } = "#FFFFFFFF";
     public int DelaySeconds { get; set; } = 3;
+    public double ClockFontSize { get; set; } = 72.0;
 }

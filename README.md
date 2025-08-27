@@ -45,9 +45,13 @@ If LibVLC cannot be found, set `LibVlcPath` in config to a directory that contai
 
 ## Configuration
 
-File: `Pinscreen2.App/config.json`
+Config file is stored per-user:
 
-Default (OS-agnostic):
+- Windows: `%LOCALAPPDATA%/Pinscreen2/config.json`
+- macOS: `~/Library/Application Support/Pinscreen2/config.json`
+- Linux: `~/.config/Pinscreen2/config.json`
+
+Default (OS-agnostic) contents:
 ```json
 {
   "MediaFolders": [

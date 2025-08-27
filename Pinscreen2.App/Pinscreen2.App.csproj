@@ -22,11 +22,7 @@
     <PackageReference Include="LibVLCSharp.Avalonia" Version="3.9.4" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Include="config.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
+  
 
   <ItemGroup>
     <AvaloniaResource Include="Assets/Fonts/**" />
