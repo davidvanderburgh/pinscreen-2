@@ -58,16 +58,16 @@
                             <TextBlock Text="Pinscreen Options" FontSize="24" Foreground="White"/>
                             <Separator/>
                             <WrapPanel>
-                                <Button Name="BtnPlayPause" Margin="0,0,8,8" Click="OnPlayPauseClicked">Play/Pause</Button>
-                                <Button Margin="0,0,8,8" Click="OnNextClicked">Next</Button>
-                                <Button Margin="0,0,8,8" Click="OnRebuildQueueClicked">Rebuild Queue</Button>
-                                <Button Margin="0,0,8,8" Click="OnSetMediaFolderClicked">Set Media Folder…</Button>
-                                <Button Margin="0,0,8,8" Click="OnToggleFullscreenClicked">Toggle Fullscreen</Button>
-                                <Button Margin="0,0,8,8" Click="OnCheckUpdatesClicked">Check for Updates…</Button>
-                                <Button Margin="0,0,8,8" Click="OnInstallUpdateZipClicked">Install Update Zip…</Button>
-                                <Button Margin="0,0,8,8" Click="OnOpenConfigClicked">Open Config</Button>
-                                <Button Margin="0,0,8,8" Click="OnOpenCurrentFolderClicked">Open Current Folder</Button>
-                                <Button Margin="0,0,8,8" Click="OnQuitClicked">Quit</Button>
+                                <Button Name="BtnPlayPause" Margin="0,0,8,8" Foreground="White" Click="OnPlayPauseClicked">Play/Pause</Button>
+                                <Button Margin="0,0,8,8" Foreground="White" Click="OnNextClicked">Next</Button>
+                                <Button Margin="0,0,8,8" Foreground="White" Click="OnRebuildQueueClicked">Rebuild Queue</Button>
+                                <Button Margin="0,0,8,8" Foreground="White" Click="OnSetMediaFolderClicked">Set Media Folder…</Button>
+                                <Button Margin="0,0,8,8" Foreground="White" Click="OnToggleFullscreenClicked">Toggle Fullscreen</Button>
+                                <Button Margin="0,0,8,8" Foreground="White" Click="OnCheckUpdatesClicked">Check for Updates…</Button>
+                                <Button Margin="0,0,8,8" Foreground="White" Click="OnInstallUpdateZipClicked">Install Update Zip…</Button>
+                                <Button Margin="0,0,8,8" Foreground="White" Click="OnOpenConfigClicked">Open Config</Button>
+                                <Button Margin="0,0,8,8" Foreground="White" Click="OnOpenCurrentFolderClicked">Open Current Folder</Button>
+                                <Button Margin="0,0,8,8" Foreground="White" Click="OnQuitClicked">Quit</Button>
                             </WrapPanel>
                             <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock Text="Clock Font:" Foreground="#CCCCCC" VerticalAlignment="Center"/>
