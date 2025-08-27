@@ -84,20 +84,17 @@ No trimming (safer for native deps like VLC):
 
 - macOS (Apple Silicon):
 ```bash
-dotnet publish Pinscreen2.App -c Release -r osx-arm64 --self-contained true \
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false
+dotnet publish Pinscreen2.App -c Release -r osx-arm64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false
 ```
 
 - Windows:
 ```bash
-dotnet publish Pinscreen2.App -c Release -r win-x64 --self-contained true \
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false
+dotnet publish Pinscreen2.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false
 ```
 
 - Linux:
 ```bash
-dotnet publish Pinscreen2.App -c Release -r linux-x64 --self-contained true \
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false
+dotnet publish Pinscreen2.App -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false
 ```
 
 Artifacts are under `Pinscreen2.App/bin/Release/<tfm>/<rid>/publish/`.
