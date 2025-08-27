@@ -14,6 +14,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 
 namespace Pinscreen2.App;
 
@@ -149,12 +150,14 @@ public partial class MainWindow : Window
             var items = new List<string>();
             if (Directory.Exists(externalFontsDir))
             {
-                items = Directory.EnumerateFiles(externalFontsDir)
+                var files = Directory.EnumerateFiles(externalFontsDir)
                     .Where(p => p.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".otf", StringComparison.OrdinalIgnoreCase))
                     .Select(Path.GetFileName)
-                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .Select(n => n ?? string.Empty)
+                    .Where(n => n.Length > 0)
                     .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
                     .ToList();
+                items.AddRange(files);
             }
             fontCombo.ItemsSource = items;
             if (!string.IsNullOrWhiteSpace(_config.ClockFontFamily))
@@ -297,19 +300,19 @@ public partial class MainWindow : Window
     {
         try
         {
-            var dialog = new OpenFolderDialog
+            var result = await this.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
             {
+                AllowMultiple = false,
                 Title = "Select Media Folder"
-            };
-            var selected = await dialog.ShowAsync(this);
-            if (!string.IsNullOrWhiteSpace(selected))
+            });
+            var folder = result?.FirstOrDefault();
+            var selectedPath = folder?.TryGetLocalPath();
+            if (!string.IsNullOrWhiteSpace(selectedPath))
             {
-                // Update config with single folder for simplicity; extend to multi-select later if needed
-                _config.MediaFolders = new List<string> { selected };
+                _config.MediaFolders = new List<string> { selectedPath! };
                 SaveConfig();
                 await BuildPlaylistAsync();
                 ToggleOverlay(false);
-                // Auto-play immediately
                 PlayNext();
             }
         }
