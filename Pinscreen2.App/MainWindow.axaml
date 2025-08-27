@@ -18,19 +18,20 @@
                PlacementAnchor="TopLeft"
                PlacementGravity="BottomRight"
                IsOpen="True">
-            <Border Background="#00000000" PointerPressed="OnRootPointerPressed"
+            <Canvas Background="#00000000" PointerPressed="OnRootPointerPressed"
                     Width="{Binding $parent[Popup].PlacementTarget.Bounds.Width}"
                     Height="{Binding $parent[Popup].PlacementTarget.Bounds.Height}">
                 <TextBlock Name="ClockText"
-                           Margin="16"
                            Foreground="White"
                            FontSize="72"
                            FontWeight="Bold"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
                            TextAlignment="Center"
+                           Cursor="SizeAll"
+                           PointerPressed="OnClockPointerPressed"
+                           PointerMoved="OnClockPointerMoved"
+                           PointerReleased="OnClockPointerReleased"
                            Text="--:--:--" />
-            </Border>
+            </Canvas>
         </Popup>
 
         <!-- Overlay shown via Popup to ensure it renders above native VideoView and clock, within app -->

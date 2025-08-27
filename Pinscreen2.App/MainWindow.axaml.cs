@@ -1,7 +1,10 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Threading;
 using LibVLCSharp.Shared;
+using Avalonia;
+using Avalonia.VisualTree;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -21,6 +24,12 @@ public partial class MainWindow : Window
     private readonly Queue<string> _playlist = new Queue<string>();
     private string _currentItem = string.Empty;
     private AppConfig _config = new AppConfig();
+    private double _clockXPercent = 50.0; // 0-100
+    private double _clockYPercent = 50.0; // 0-100
+    private bool _isDraggingClock = false;
+    private bool _suppressOverlayOpen = false;
+    private Avalonia.Point _dragStartPointer;
+    private Avalonia.Point _dragStartClockPos;
     // Expose config for overlay window
     public AppConfig Config => _config;
 
@@ -41,7 +50,7 @@ public partial class MainWindow : Window
         this.KeyDown += OnKeyDown;
         // Ensure we receive click/tap anywhere (even if child controls mark handled)
         AddHandler(InputElement.PointerPressedEvent, OnRootPointerPressed,
-            RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
+            RoutingStrategies.Bubble, handledEventsToo: false);
         // No special positioning needed; clock is a centered popup
     }
 
@@ -59,7 +68,14 @@ public partial class MainWindow : Window
             Core.Initialize();
         }
         LoadConfig();
+        // Initialize clock position from config if present
+        _clockXPercent = Math.Clamp(_config.ClockXPercent, 0, 100);
+        _clockYPercent = Math.Clamp(_config.ClockYPercent, 0, 100);
         SetupClock();
+        this.AttachedToVisualTree += (_, __) =>
+        {
+            try { UpdateClock(); } catch { }
+        };
         await BuildPlaylistAsync();
 
         // Initialize LibVLC with software decode; let VideoView callbacks choose vout
@@ -112,12 +128,34 @@ public partial class MainWindow : Window
 
     private void OnRootPointerPressed(object? sender, PointerPressedEventArgs e)
     {
+        // Ignore while dragging the clock to prevent unintended overlay opens
+        if (_isDraggingClock || _suppressOverlayOpen)
+            return;
+
+        // Ignore clicks originating from clock or overlay content
+        try
+        {
+            if (e.Source is Control c)
+            {
+                // Walk up using Parent chain for Controls only
+                var current = c;
+                while (current != null)
+                {
+                    if (ReferenceEquals(current, ClockText) || current.Name == "OverlayPanel")
+                        return;
+                    current = current.Parent as Control;
+                }
+            }
+        }
+        catch { }
+
         // Only open overlay when closed; closing handled by backdrop/Escape
-        e.Handled = true;
         Dispatcher.UIThread.Post(() =>
         {
             try
             {
+                if (_suppressOverlayOpen || _isDraggingClock)
+                    return;
                 if (OverlayPopup != null && !OverlayPopup.IsOpen)
                     ToggleOverlay(true);
             }
@@ -406,6 +444,22 @@ public partial class MainWindow : Window
             if (ClockText != null)
             {
                 ClockText.Text = now;
+                // Position clock based on percentage within the RootGrid
+                try
+                {
+                    var root = this.FindControl<Grid>("RootGrid");
+                    if (root != null)
+                    {
+                        var width = root.Bounds.Width;
+                        var height = root.Bounds.Height;
+                        // Approximate text size center; adjust by half text width/height not known here
+                        var x = (width - ClockText.Bounds.Width) * (_clockXPercent / 100.0);
+                        var y = (height - ClockText.Bounds.Height) * (_clockYPercent / 100.0);
+                        Canvas.SetLeft(ClockText, x);
+                        Canvas.SetTop(ClockText, y);
+                    }
+                }
+                catch { }
                 return;
             }
         }
@@ -414,6 +468,63 @@ public partial class MainWindow : Window
         {
             var clock = this.FindControl<TextBlock>("ClockText");
             if (clock != null) clock.Text = now;
+        }
+        catch { }
+    }
+
+    private void OnClockPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        try
+        {
+            if (ClockText == null) return;
+            var parent = ClockText.Parent as Control;
+            var pos = e.GetPosition(parent);
+            _dragStartPointer = pos;
+            _dragStartClockPos = new Avalonia.Point(Canvas.GetLeft(ClockText), Canvas.GetTop(ClockText));
+            _isDraggingClock = true;
+            _suppressOverlayOpen = true;
+            e.Pointer.Capture(ClockText);
+            e.Handled = true;
+        }
+        catch { }
+    }
+
+    private void OnClockPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_isDraggingClock || ClockText == null) return;
+        try
+        {
+            var parent = ClockText.Parent as Control;
+            if (parent == null) return;
+            var current = e.GetPosition(parent);
+            var delta = current - _dragStartPointer;
+            var newLeft = _dragStartClockPos.X + delta.X;
+            var newTop = _dragStartClockPos.Y + delta.Y;
+            newLeft = Math.Max(0, Math.Min(newLeft, parent.Bounds.Width - ClockText.Bounds.Width));
+            newTop = Math.Max(0, Math.Min(newTop, parent.Bounds.Height - ClockText.Bounds.Height));
+            Canvas.SetLeft(ClockText, newLeft);
+            Canvas.SetTop(ClockText, newTop);
+
+            // Update percents live
+            _clockXPercent = parent.Bounds.Width <= 0 ? 0 : (newLeft / (parent.Bounds.Width - ClockText.Bounds.Width)) * 100.0;
+            _clockYPercent = parent.Bounds.Height <= 0 ? 0 : (newTop / (parent.Bounds.Height - ClockText.Bounds.Height)) * 100.0;
+            _config.ClockXPercent = _clockXPercent;
+            _config.ClockYPercent = _clockYPercent;
+            SaveConfig();
+            e.Handled = true;
+        }
+        catch { }
+    }
+
+    private void OnClockPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        try
+        {
+            _isDraggingClock = false;
+            e.Pointer.Capture(null);
+            // Re-enable overlay opening on subsequent clicks
+            _suppressOverlayOpen = false;
+            e.Handled = true;
         }
         catch { }
     }
@@ -585,4 +696,6 @@ public class AppConfig
     public string ClockFormat { get; set; } = "HH:mm:ss";
     public bool BalanceQueueByGame { get; set; } = true;
     public string LibVlcPath { get; set; } = string.Empty;
+    public double ClockXPercent { get; set; } = 50.0;
+    public double ClockYPercent { get; set; } = 50.0;
 }
