@@ -5,6 +5,7 @@ using Avalonia.Threading;
 using LibVLCSharp.Shared;
 using Avalonia;
 using Avalonia.VisualTree;
+using Avalonia.Media;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -30,6 +31,8 @@ public partial class MainWindow : Window
     private bool _suppressOverlayOpen = false;
     private Avalonia.Point _dragStartPointer;
     private Avalonia.Point _dragStartClockPos;
+    private const double ClockEdgePadding = 8.0;
+    private string _clockColorHex = "#FFFFFFFF";
     // Expose config for overlay window
     public AppConfig Config => _config;
 
@@ -52,6 +55,7 @@ public partial class MainWindow : Window
         AddHandler(InputElement.PointerPressedEvent, OnRootPointerPressed,
             RoutingStrategies.Bubble, handledEventsToo: false);
         // No special positioning needed; clock is a centered popup
+        try { if (OverlayPopup != null) OverlayPopup.Opened += (_, __) => TryPopulateClockFontCombo(); } catch { }
     }
 
     private async void InitializeAsync()
@@ -71,6 +75,7 @@ public partial class MainWindow : Window
         // Initialize clock position from config if present
         _clockXPercent = Math.Clamp(_config.ClockXPercent, 0, 100);
         _clockYPercent = Math.Clamp(_config.ClockYPercent, 0, 100);
+        _clockColorHex = string.IsNullOrWhiteSpace(_config.ClockColor) ? _clockColorHex : _config.ClockColor;
         SetupClock();
         this.AttachedToVisualTree += (_, __) =>
         {
@@ -122,6 +127,52 @@ public partial class MainWindow : Window
             if (OverlayPopup == null) return;
             var newState = force ?? !OverlayPopup.IsOpen;
             OverlayPopup.IsOpen = newState;
+            if (newState)
+            {
+                TryPopulateClockFontCombo();
+            }
+        }
+        catch { }
+    }
+    private void TryPopulateClockFontCombo()
+    {
+        try
+        {
+            var fontCombo = this.FindControl<ComboBox>("ClockFontCombo");
+            var colorCombo = this.FindControl<ComboBox>("ClockColorCombo");
+            if (fontCombo == null) return;
+            var externalFontsDir = Path.Combine(AppContext.BaseDirectory, "Assets", "Fonts");
+            var items = new List<string>();
+            if (Directory.Exists(externalFontsDir))
+            {
+                items = Directory.EnumerateFiles(externalFontsDir)
+                    .Where(p => p.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".otf", StringComparison.OrdinalIgnoreCase))
+                    .Select(Path.GetFileName)
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+            fontCombo.ItemsSource = items;
+            if (!string.IsNullOrWhiteSpace(_config.ClockFontFamily))
+            {
+                var match = items.FirstOrDefault(n => string.Equals(n, _config.ClockFontFamily, StringComparison.OrdinalIgnoreCase)
+                                                     || string.Equals(Path.GetFileNameWithoutExtension(n), _config.ClockFontFamily, StringComparison.OrdinalIgnoreCase));
+                if (match != null)
+                {
+                    fontCombo.SelectedItem = match;
+                }
+            }
+            if (colorCombo != null)
+            {
+                foreach (var it in colorCombo.Items.OfType<ComboBoxItem>())
+                {
+                    if (string.Equals(it.Tag?.ToString(), _clockColorHex, StringComparison.OrdinalIgnoreCase))
+                    {
+                        colorCombo.SelectedItem = it;
+                        break;
+                    }
+                }
+            }
         }
         catch { }
     }
@@ -443,6 +494,12 @@ public partial class MainWindow : Window
         {
             if (ClockText != null)
             {
+                if (!string.IsNullOrWhiteSpace(_config.ClockFontFamily))
+                {
+                    try { ApplyClockFontSafely(_config.ClockFontFamily); } catch { }
+                }
+                // Apply color
+                try { ClockText.Foreground = new SolidColorBrush(Color.Parse(_clockColorHex)); } catch { }
                 ClockText.Text = now;
                 // Position clock based on percentage within the RootGrid
                 try
@@ -450,11 +507,15 @@ public partial class MainWindow : Window
                     var root = this.FindControl<Grid>("RootGrid");
                     if (root != null)
                     {
-                        var width = root.Bounds.Width;
-                        var height = root.Bounds.Height;
-                        // Approximate text size center; adjust by half text width/height not known here
-                        var x = (width - ClockText.Bounds.Width) * (_clockXPercent / 100.0);
-                        var y = (height - ClockText.Bounds.Height) * (_clockYPercent / 100.0);
+                        // Measure the text to get accurate size for clamping
+                        ClockText.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                        var textSize = ClockText.DesiredSize;
+                        var width = Math.Max(0, root.Bounds.Width - (ClockEdgePadding * 2));
+                        var height = Math.Max(0, root.Bounds.Height - (ClockEdgePadding * 2));
+                        var maxLeft = Math.Max(0, width - textSize.Width);
+                        var maxTop = Math.Max(0, height - textSize.Height);
+                        var x = ClockEdgePadding + maxLeft * (_clockXPercent / 100.0);
+                        var y = ClockEdgePadding + maxTop * (_clockYPercent / 100.0);
                         Canvas.SetLeft(ClockText, x);
                         Canvas.SetTop(ClockText, y);
                     }
@@ -470,6 +531,95 @@ public partial class MainWindow : Window
             if (clock != null) clock.Text = now;
         }
         catch { }
+    }
+
+    private void OnClockFontSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (sender is ComboBox combo)
+            {
+                var fileName = combo.SelectedItem as string;
+                var familyName = Path.GetFileNameWithoutExtension(fileName ?? string.Empty);
+                var effective = !string.IsNullOrWhiteSpace(fileName) ? fileName : familyName;
+                if (!string.IsNullOrWhiteSpace(effective))
+                {
+                    _config.ClockFontFamily = effective;
+                    SaveConfig();
+                    try { ApplyClockFontSafely(effective); } catch { }
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void OnClockColorSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            if (sender is ComboBox combo)
+            {
+                var item = combo.SelectedItem as ComboBoxItem;
+                var hex = item?.Tag?.ToString();
+                if (!string.IsNullOrWhiteSpace(hex))
+                {
+                    _clockColorHex = hex!;
+                    _config.ClockColor = _clockColorHex;
+                    SaveConfig();
+                    try
+                    {
+                        if (ClockText != null)
+                            ClockText.Foreground = new SolidColorBrush(Color.Parse(_clockColorHex));
+                    }
+                    catch { }
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void ApplyClockFontSafely(string fileOrFamily)
+    {
+        if (ClockText == null) return;
+        // Build candidate font family URIs and validate by measuring a temporary TextBlock
+        var candidates = new List<string>();
+        var assetsPath = Path.Combine(AppContext.BaseDirectory, "Assets", "Fonts", fileOrFamily);
+        if (File.Exists(assetsPath))
+        {
+            var baseName = Path.GetFileNameWithoutExtension(fileOrFamily);
+            var spaced = baseName.Replace("_", " ").Replace("-", " ");
+            var title = System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(spaced.ToLowerInvariant());
+            // Try several possible family name variants
+            candidates.Add($"avares://Pinscreen2.App/Assets/Fonts/{fileOrFamily}#{baseName}");
+            if (!string.Equals(title, baseName, StringComparison.Ordinal))
+                candidates.Add($"avares://Pinscreen2.App/Assets/Fonts/{fileOrFamily}#{title}");
+            if (!string.Equals(spaced, baseName, StringComparison.Ordinal))
+                candidates.Add($"avares://Pinscreen2.App/Assets/Fonts/{fileOrFamily}#{spaced}");
+            // Also try without family suffix as last resort
+            candidates.Add($"avares://Pinscreen2.App/Assets/Fonts/{fileOrFamily}");
+        }
+        else
+        {
+            // Assume it's a system-installed family name
+            candidates.Add(fileOrFamily);
+        }
+
+        foreach (var cand in candidates.Distinct())
+        {
+            try
+            {
+                var ff = new FontFamily(cand);
+                var probe = new TextBlock { FontFamily = ff, Text = "Aa", FontSize = 14 };
+                // This triggers glyph resolution within try/catch
+                probe.Measure(new Size(100, 40));
+                ClockText.FontFamily = ff;
+                return;
+            }
+            catch { }
+        }
+
+        // Fallback to default if none worked
+        try { ClockText.FontFamily = new FontFamily("Inter"); } catch { }
     }
 
     private void OnClockPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -500,14 +650,21 @@ public partial class MainWindow : Window
             var delta = current - _dragStartPointer;
             var newLeft = _dragStartClockPos.X + delta.X;
             var newTop = _dragStartClockPos.Y + delta.Y;
-            newLeft = Math.Max(0, Math.Min(newLeft, parent.Bounds.Width - ClockText.Bounds.Width));
-            newTop = Math.Max(0, Math.Min(newTop, parent.Bounds.Height - ClockText.Bounds.Height));
+            // Measure current text size for precise clamping
+            ClockText.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            var textSize = ClockText.DesiredSize;
+            var maxLeft = Math.Max(0, parent.Bounds.Width - ClockEdgePadding - textSize.Width);
+            var maxTop = Math.Max(0, parent.Bounds.Height - ClockEdgePadding - textSize.Height);
+            newLeft = Math.Max(ClockEdgePadding, Math.Min(newLeft, maxLeft));
+            newTop = Math.Max(ClockEdgePadding, Math.Min(newTop, maxTop));
             Canvas.SetLeft(ClockText, newLeft);
             Canvas.SetTop(ClockText, newTop);
 
             // Update percents live
-            _clockXPercent = parent.Bounds.Width <= 0 ? 0 : (newLeft / (parent.Bounds.Width - ClockText.Bounds.Width)) * 100.0;
-            _clockYPercent = parent.Bounds.Height <= 0 ? 0 : (newTop / (parent.Bounds.Height - ClockText.Bounds.Height)) * 100.0;
+            var usableWidth = Math.Max(0.0001, parent.Bounds.Width - (ClockEdgePadding * 2) - textSize.Width);
+            var usableHeight = Math.Max(0.0001, parent.Bounds.Height - (ClockEdgePadding * 2) - textSize.Height);
+            _clockXPercent = ((newLeft - ClockEdgePadding) / usableWidth) * 100.0;
+            _clockYPercent = ((newTop - ClockEdgePadding) / usableHeight) * 100.0;
             _config.ClockXPercent = _clockXPercent;
             _config.ClockYPercent = _clockYPercent;
             SaveConfig();
@@ -698,4 +855,6 @@ public class AppConfig
     public string LibVlcPath { get; set; } = string.Empty;
     public double ClockXPercent { get; set; } = 50.0;
     public double ClockYPercent { get; set; } = 50.0;
+    public string ClockFontFamily { get; set; } = string.Empty; // file path or family name
+    public string ClockColor { get; set; } = "#FFFFFFFF";
 }

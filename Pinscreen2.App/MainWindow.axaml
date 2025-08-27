@@ -65,6 +65,25 @@
                                 <Button Margin="0,0,8,8" Click="OnOpenCurrentFolderClicked">Open Current Folder</Button>
                                 <Button Margin="0,0,8,8" Click="OnQuitClicked">Quit</Button>
                             </WrapPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock Text="Clock Font:" Foreground="#CCCCCC" VerticalAlignment="Center"/>
+                                <ComboBox Name="ClockFontCombo" Width="260" SelectionChanged="OnClockFontSelectionChanged"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock Text="Clock Color:" Foreground="#CCCCCC" VerticalAlignment="Center"/>
+                                <ComboBox Name="ClockColorCombo" Width="180" SelectionChanged="OnClockColorSelectionChanged">
+                                    <ComboBoxItem Content="White" Tag="#FFFFFFFF"/>
+                                    <ComboBoxItem Content="Black" Tag="#FF000000"/>
+                                    <ComboBoxItem Content="Red" Tag="#FFFF3B30"/>
+                                    <ComboBoxItem Content="Orange" Tag="#FFFF9500"/>
+                                    <ComboBoxItem Content="Yellow" Tag="#FFFFCC00"/>
+                                    <ComboBoxItem Content="Green" Tag="#FF34C759"/>
+                                    <ComboBoxItem Content="Cyan" Tag="#FF32ADE6"/>
+                                    <ComboBoxItem Content="Blue" Tag="#FF007AFF"/>
+                                    <ComboBoxItem Content="Purple" Tag="#FFAF52DE"/>
+                                    <ComboBoxItem Content="Magenta" Tag="#FFFF2D55"/>
+                                </ComboBox>
+                            </StackPanel>
                             <TextBlock Name="StatusText" Foreground="#CCCCCC"/>
                             <TextBlock Text="Tip: click anywhere to toggle this overlay. Press Esc to close." Foreground="#CCCCCC"/>
                         </StackPanel>
