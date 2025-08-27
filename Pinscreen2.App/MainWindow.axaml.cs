@@ -11,6 +11,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Net.Http;
+using System.Reflection;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using Avalonia.Interactivity;
@@ -38,6 +40,7 @@ public partial class MainWindow : Window
     private bool _libVlcInitFailed = false;
     private bool _isInitializingUi = true;
     private string _effectiveConfigPath = string.Empty;
+    private const string GitHubUpdateRepo = "dvanderburgh/pinscreen-2"; // permanently linked repo
     // Expose config for overlay window
     public AppConfig Config => _config;
 
@@ -97,6 +100,7 @@ public partial class MainWindow : Window
         this.AttachedToVisualTree += (_, __) =>
         {
             try { UpdateClock(); } catch { }
+            try { UpdateVersionInfo(); } catch { }
         };
         await BuildPlaylistAsync();
 
@@ -156,6 +160,7 @@ public partial class MainWindow : Window
             if (newState)
             {
                 TryPopulateClockFontCombo();
+                try { UpdateVersionInfo(); } catch { }
             }
         }
         catch { }
@@ -421,6 +426,281 @@ public partial class MainWindow : Window
     private void OnQuitClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         Close();
+    }
+
+    private async void OnInstallUpdateZipClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            // Pick a zip file
+            var files = await this.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                AllowMultiple = false,
+                Title = "Select Update Zip",
+                FileTypeFilter = new[] { new FilePickerFileType("Zip") { Patterns = new[] { "*.zip" }.ToList() } }
+            });
+            var file = files?.FirstOrDefault();
+            var zipPath = file?.TryGetLocalPath();
+            if (string.IsNullOrWhiteSpace(zipPath)) return;
+
+            var appDir = AppContext.BaseDirectory;
+            var exeName = OperatingSystem.IsWindows() ? "Pinscreen2.App.exe" : (OperatingSystem.IsMacOS() ? "Pinscreen2.App" : "Pinscreen2.App");
+            var updaterPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Pinscreen2.Updater", "bin", "Debug", "net9.0", OperatingSystem.IsWindows() ? "Pinscreen2.Updater.exe" : "Pinscreen2.Updater");
+            // If not found in dev path, try alongside app (for published scenarios)
+            if (!File.Exists(updaterPath))
+            {
+                updaterPath = Path.Combine(appDir, OperatingSystem.IsWindows() ? "Pinscreen2.Updater.exe" : "Pinscreen2.Updater");
+            }
+            if (!File.Exists(updaterPath))
+            {
+                await ShowMessageAsync("Updater not found. Ensure Pinscreen2.Updater is deployed next to the app or run from dev output.");
+                return;
+            }
+
+            // Launch updater and quit
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = updaterPath,
+                    UseShellExecute = true,
+                    WorkingDirectory = appDir,
+                    ArgumentList = { appDir, zipPath!, exeName }
+                };
+                System.Diagnostics.Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                await ShowMessageAsync($"Failed to launch updater: {ex.Message}");
+                return;
+            }
+            Close();
+        }
+        catch { }
+    }
+
+    private async void OnCheckUpdatesClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            var apiLatest = $"https://api.github.com/repos/{GitHubUpdateRepo}/releases/latest";
+            var apiList = $"https://api.github.com/repos/{GitHubUpdateRepo}/releases";
+            using var http = new HttpClient();
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("Pinscreen2-Updater");
+            http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+            http.Timeout = TimeSpan.FromSeconds(20);
+            // Allow private repo via token
+            var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN") ?? Environment.GetEnvironmentVariable("GH_TOKEN");
+            if (!string.IsNullOrWhiteSpace(token))
+            {
+                http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            }
+
+            JsonElement releaseEl = default;
+            try
+            {
+                using var resp = await http.GetAsync(apiLatest);
+                if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    // No latest release (or private repo without token). Try list and pick first non-draft
+                    using var respList = await http.GetAsync(apiList);
+                    if (!respList.IsSuccessStatusCode)
+                    {
+                        await ShowMessageAsync($"Update check failed: {(int)respList.StatusCode} {respList.ReasonPhrase}. Ensure a published release exists and API access.");
+                        return;
+                    }
+                    var arr = JsonDocument.Parse(await respList.Content.ReadAsByteArrayAsync()).RootElement;
+                    if (arr.ValueKind != JsonValueKind.Array || arr.GetArrayLength() == 0)
+                    {
+                        await ShowMessageAsync("No releases found. Publish a release on GitHub.");
+                        return;
+                    }
+                    // Prefer first non-draft; include prereleases
+                    var pick = arr.EnumerateArray().FirstOrDefault(e => e.TryGetProperty("draft", out var d) && d.ValueKind == JsonValueKind.False);
+                    if (pick.ValueKind == JsonValueKind.Undefined)
+                        pick = arr.EnumerateArray().First();
+                    releaseEl = pick;
+                }
+                else if (resp.IsSuccessStatusCode)
+                {
+                    releaseEl = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync()).RootElement;
+                }
+                else
+                {
+                    await ShowMessageAsync($"Update check failed: {(int)resp.StatusCode} {resp.ReasonPhrase}. If the repo is private, set GITHUB_TOKEN.");
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                await ShowMessageAsync($"Update check failed: {ex.Message}");
+                return;
+            }
+
+            var tag = releaseEl.TryGetProperty("tag_name", out var tagProp) ? tagProp.GetString() ?? string.Empty : string.Empty;
+            var assets = releaseEl.TryGetProperty("assets", out var assetsProp) ? assetsProp : default;
+
+            var localVersion = GetLocalVersion();
+            var remoteVersion = ParseVersion(tag);
+            if (remoteVersion != null && localVersion != null && remoteVersion <= localVersion)
+            {
+                await ShowMessageAsync($"You're up to date. Current: {localVersion} Latest: {remoteVersion}");
+                return;
+            }
+
+            // Find asset matching current platform
+            string? downloadUrl = null;
+            string? assetName = null;
+            if (assets.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var a in assets.EnumerateArray())
+                {
+                    var name = a.TryGetProperty("name", out var n) ? n.GetString() ?? string.Empty : string.Empty;
+                    var url = a.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? string.Empty : string.Empty;
+                    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(url)) continue;
+                    if (IsAssetMatchForCurrentRuntime(name))
+                    {
+                        downloadUrl = url;
+                        assetName = name;
+                        break;
+                    }
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(downloadUrl))
+            {
+                await ShowMessageAsync("No suitable release asset found for this OS/architecture.");
+                return;
+            }
+
+            // Download to temp
+            string tmpFile;
+            try
+            {
+                tmpFile = Path.Combine(Path.GetTempPath(), assetName ?? ("pinscreen2-update-" + Guid.NewGuid().ToString("N") + ".zip"));
+                var data = await http.GetByteArrayAsync(downloadUrl);
+                await File.WriteAllBytesAsync(tmpFile, data);
+            }
+            catch (Exception ex)
+            {
+                await ShowMessageAsync($"Download failed: {ex.Message}");
+                return;
+            }
+
+            // Launch updater
+            var appDir = AppContext.BaseDirectory;
+            var exeName = OperatingSystem.IsWindows() ? "Pinscreen2.App.exe" : (OperatingSystem.IsMacOS() ? "Pinscreen2.App" : "Pinscreen2.App");
+            var updaterPath = Path.Combine(appDir, OperatingSystem.IsWindows() ? "Pinscreen2.Updater.exe" : "Pinscreen2.Updater");
+            if (!File.Exists(updaterPath))
+            {
+                // Try dev output (running from IDE)
+                var dev = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Pinscreen2.Updater", "bin", "Debug", "net9.0", OperatingSystem.IsWindows() ? "Pinscreen2.Updater.exe" : "Pinscreen2.Updater"));
+                if (File.Exists(dev)) updaterPath = dev;
+            }
+            if (!File.Exists(updaterPath))
+            {
+                await ShowMessageAsync("Updater not found beside app. Ensure Pinscreen2.Updater is deployed.");
+                return;
+            }
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = updaterPath,
+                    UseShellExecute = true,
+                    WorkingDirectory = appDir,
+                };
+                psi.ArgumentList.Add(appDir);
+                psi.ArgumentList.Add(tmpFile);
+                psi.ArgumentList.Add(exeName);
+                System.Diagnostics.Process.Start(psi);
+                Close();
+            }
+            catch (Exception ex)
+            {
+                await ShowMessageAsync($"Failed to launch updater: {ex.Message}");
+            }
+        }
+        catch { }
+    }
+
+    private static Version? GetLocalVersion()
+    {
+        try
+        {
+            var asm = Assembly.GetExecutingAssembly();
+            var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            if (!string.IsNullOrWhiteSpace(info)) return ParseVersion(info);
+            return asm.GetName().Version;
+        }
+        catch { return null; }
+    }
+
+    private static Version? ParseVersion(string? v)
+    {
+        if (string.IsNullOrWhiteSpace(v)) return null;
+        var s = v.Trim().TrimStart('v', 'V');
+        Version ver;
+        return Version.TryParse(s, out ver) ? ver : null;
+    }
+
+    private static bool IsAssetMatchForCurrentRuntime(string assetName)
+    {
+        var name = assetName.ToLowerInvariant();
+        if (!name.EndsWith(".zip")) return false;
+        if (OperatingSystem.IsWindows())
+        {
+            return name.Contains("win-x64") || name.Contains("windows") || name.Contains("win64") || name.Contains("win");
+        }
+        if (OperatingSystem.IsMacOS())
+        {
+            var isArm = RuntimeInformation.OSArchitecture == Architecture.Arm64;
+            return (isArm && (name.Contains("osx-arm64") || name.Contains("mac-arm64") || name.Contains("macos-arm64")))
+                || (!isArm && (name.Contains("osx-x64") || name.Contains("mac-x64") || name.Contains("macos-x64") || name.Contains("osx")));
+        }
+        // Linux
+        return name.Contains("linux-x64") || name.Contains("linux");
+    }
+
+    private async Task ShowMessageAsync(string text)
+    {
+        try
+        {
+            // Suppress overlay auto-open while dialog is visible
+            var prevSuppress = _suppressOverlayOpen;
+            _suppressOverlayOpen = true;
+            try { if (OverlayPopup != null) OverlayPopup.IsOpen = false; } catch { }
+
+            var dlg = new Window
+            {
+                Width = 520,
+                Height = 180,
+                Title = "Pinscreen 2",
+                CanResize = false,
+                Topmost = true,
+                ShowInTaskbar = false,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                SizeToContent = SizeToContent.WidthAndHeight,
+                Background = Brushes.Black,
+                Content = new StackPanel
+                {
+                    Margin = new Thickness(16),
+                    Children =
+                    {
+                        new TextBlock{ Text = text, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.White, MaxWidth = 460 },
+                        new Button{ Content = "OK", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right, Margin = new Thickness(0,12,0,0) }
+                    }
+                }
+            };
+            if (dlg.Content is StackPanel sp && sp.Children.OfType<Button>().FirstOrDefault() is Button ok)
+            {
+                ok.Click += (_, __) => dlg.Close();
+            }
+            await dlg.ShowDialog(this);
+
+            _suppressOverlayOpen = prevSuppress;
+        }
+        catch { _suppressOverlayOpen = false; }
     }
 
     private void OnToggleFullscreenClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1152,6 +1432,31 @@ public partial class MainWindow : Window
         }
         catch { }
     }
+
+    private void UpdateVersionInfo()
+    {
+        try
+        {
+            var versionText = this.FindControl<TextBlock>("VersionText");
+            if (versionText == null) return;
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            var ver = asm.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                      ?? asm.GetName().Version?.ToString() ?? "0.0.0";
+            var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            string updated = "";
+            try
+            {
+                var fi = !string.IsNullOrWhiteSpace(exePath) && File.Exists(exePath) ? new FileInfo(exePath) : null;
+                if (fi != null)
+                {
+                    updated = fi.LastWriteTime.ToString("yyyy-MM-dd HH:mm");
+                }
+            }
+            catch { }
+            versionText.Text = string.IsNullOrWhiteSpace(updated) ? $"Version: {ver}" : $"Version: {ver}   Updated: {updated}";
+        }
+        catch { }
+    }
 }
 
 public class AppConfig
@@ -1166,4 +1471,5 @@ public class AppConfig
     public string ClockColor { get; set; } = "#FFFFFFFF";
     public int DelaySeconds { get; set; } = 3;
     public double ClockFontSize { get; set; } = 72.0;
+    // UpdateGitHubRepo no longer needed; updater is permanently linked to the repo in code
 }

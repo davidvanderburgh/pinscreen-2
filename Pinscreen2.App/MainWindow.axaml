@@ -63,6 +63,8 @@
                                 <Button Margin="0,0,8,8" Click="OnRebuildQueueClicked">Rebuild Queue</Button>
                                 <Button Margin="0,0,8,8" Click="OnSetMediaFolderClicked">Set Media Folder…</Button>
                                 <Button Margin="0,0,8,8" Click="OnToggleFullscreenClicked">Toggle Fullscreen</Button>
+                                <Button Margin="0,0,8,8" Click="OnCheckUpdatesClicked">Check for Updates…</Button>
+                                <Button Margin="0,0,8,8" Click="OnInstallUpdateZipClicked">Install Update Zip…</Button>
                                 <Button Margin="0,0,8,8" Click="OnOpenConfigClicked">Open Config</Button>
                                 <Button Margin="0,0,8,8" Click="OnOpenCurrentFolderClicked">Open Current Folder</Button>
                                 <Button Margin="0,0,8,8" Click="OnQuitClicked">Quit</Button>
@@ -92,6 +94,7 @@
                                 <TextBlock Name="ClockSizeValueText" Foreground="#CCCCCC" VerticalAlignment="Center"/>
                             </StackPanel>
                             <TextBlock Name="StatusText" Foreground="#CCCCCC"/>
+                            <TextBlock Name="VersionText" Foreground="#888888"/>
                             <TextBlock Text="Tip: click anywhere to toggle this overlay. Press Esc to close." Foreground="#CCCCCC"/>
                             <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock Text="Delay between videos:" Foreground="#CCCCCC" VerticalAlignment="Center"/>

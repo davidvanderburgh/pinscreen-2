@@ -102,6 +102,51 @@ dotnet publish Pinscreen2.App -c Release -r linux-x64 --self-contained true \
 
 Artifacts are under `Pinscreen2.App/bin/Release/<tfm>/<rid>/publish/`.
 
+## Releases and auto-update
+
+The app can download updates from GitHub Releases if you set `UpdateGitHubRepo` (e.g., `"yourname/pinscreen-2"`) in your per-user config.
+
+### Create a release from local
+
+Prereqs: GitHub CLI (`gh auth login`), git remote points to GitHub.
+
+1) Tag a version
+```powershell
+$ver = "v0.1.0"
+git tag -a $ver -m "Pinscreen 2 $ver"
+git push origin $ver
+```
+
+2) Build and zip artifacts (Windows example; repeat for other platforms as needed)
+```powershell
+Remove-Item -Recurse -Force .\publish -ErrorAction Ignore
+
+# Windows x64
+dotnet publish Pinscreen2.App -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false `
+  -o .\publish\win-x64
+
+# Include updater next to app (ensure it's built in Release)
+dotnet build .\Pinscreen2.Updater\Pinscreen2.Updater.csproj -c Release
+Copy-Item .\Pinscreen2.Updater\bin\Release\net9.0\* .\publish\win-x64 -Recurse -Force
+
+# Zip (name should include runtime for matching)
+Compress-Archive -Path .\publish\win-x64\* -DestinationPath .\Pinscreen2-win-x64.zip -Force
+```
+
+3) Create the GitHub Release and upload assets
+```powershell
+gh release create $ver .\Pinscreen2-win-x64.zip --title "Pinscreen 2 $ver" --notes "Release $ver"
+```
+
+Naming tips:
+- Use zip filenames containing the target runtime/OS, e.g., `Pinscreen2-win-x64.zip`, `Pinscreen2-osx-arm64.zip`, `Pinscreen2-linux-x64.zip`.
+- Each zip should contain the published app AND `Pinscreen2.Updater(.exe)` in the same folder.
+
+Updater behavior:
+- The app calls `https://api.github.com/repos/{UpdateGitHubRepo}/releases/latest`.
+- It picks a zip asset matching the current OS/architecture, downloads to a temp file, runs `Pinscreen2.Updater` to apply it, and relaunches.
+
 ## Notes
 
 - macOS: the dynamic loader must know VLC's library locations at process start. Use `./run-macos.sh` which sets `DYLD_LIBRARY_PATH` and `VLC_PLUGIN_PATH` based on your VLC install or `LibVlcPath` in `Pinscreen2.App/config.json`.
