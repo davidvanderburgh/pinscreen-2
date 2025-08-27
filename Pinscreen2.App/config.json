@@ -1,9 +1,9 @@
 {
   "MediaFolders": [
-    "/Users/dvanderburgh/development/pinscreen-2/videos"
+    "videos"
   ],
   "ClockFormat": "HH:mm:ss",
   "BalanceQueueByGame": true,
-  "LibVlcPath": "/Applications/VLC.app/Contents/MacOS/lib"
+  "LibVlcPath": "C:\\Program Files\\VideoLAN\\VLC"
 }
 

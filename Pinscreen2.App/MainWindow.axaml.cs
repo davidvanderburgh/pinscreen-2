@@ -35,6 +35,7 @@ public partial class MainWindow : Window
     private const double ClockEdgePadding = 8.0;
     private string _clockColorHex = "#FFFFFFFF";
     private int _delaySeconds = 3;
+    private bool _libVlcInitFailed = false;
     // Expose config for overlay window
     public AppConfig Config => _config;
 
@@ -63,15 +64,25 @@ public partial class MainWindow : Window
     private async void InitializeAsync()
     {
         var libVlcPath = GetLibVlcDirectory();
-        if (!string.IsNullOrWhiteSpace(libVlcPath))
+        try
         {
-            SetPlatformLibraryEnv(libVlcPath);
-            SetVlcPluginPath(libVlcPath);
-            Core.Initialize(libVlcPath);
+            if (!string.IsNullOrWhiteSpace(libVlcPath))
+            {
+                SetPlatformLibraryEnv(libVlcPath);
+                SetVlcPluginPath(libVlcPath);
+                Core.Initialize(libVlcPath);
+                try { Console.WriteLine($"LibVLC Core.Initialize using: {libVlcPath}"); } catch { }
+            }
+            else
+            {
+                Core.Initialize();
+                try { Console.WriteLine("LibVLC Core.Initialize using default lookup (PATH/current dir)"); } catch { }
+            }
         }
-        else
+        catch (Exception ex)
         {
-            Core.Initialize();
+            _libVlcInitFailed = true;
+            try { Console.WriteLine($"LibVLC initialization failed: {ex.Message}"); } catch { }
         }
         LoadConfig();
         // Initialize clock position from config if present
@@ -87,12 +98,21 @@ public partial class MainWindow : Window
         await BuildPlaylistAsync();
 
         // Initialize LibVLC with software decode; let VideoView callbacks choose vout
-        _libVlc = new LibVLC(new[] { "--vout=opengl", "--avcodec-hw=none", "--no-video-title-show" });
-        _mediaPlayer = new MediaPlayer(_libVlc);
-        _mediaPlayer.EncounteredError += (_, __) => Dispatcher.UIThread.Post(PlayNext);
+        try
+        {
+            _libVlc = new LibVLC(new[] { "--vout=opengl", "--avcodec-hw=none", "--no-video-title-show" });
+            _mediaPlayer = new MediaPlayer(_libVlc);
+            _mediaPlayer.EncounteredError += (_, __) => Dispatcher.UIThread.Post(PlayNext);
+            _libVlcInitFailed = false;
+        }
+        catch (Exception ex)
+        {
+            _libVlcInitFailed = true;
+            try { Console.WriteLine($"LibVLC create failed: {ex.Message}"); } catch { }
+        }
 
         // Disable VLC marquee to avoid conflicting clock overlays
-        try { _mediaPlayer.SetMarqueeInt(VideoMarqueeOption.Enable, 0); } catch { }
+        try { _mediaPlayer?.SetMarqueeInt(VideoMarqueeOption.Enable, 0); } catch { }
 
         // Defer attaching the MediaPlayer until the VideoView is attached and sized
         VideoView.AttachedToVisualTree += (_, __) =>
@@ -300,13 +320,37 @@ public partial class MainWindow : Window
     {
         try
         {
-            var result = await this.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            // Ensure overlay doesn't block interaction and window isn't top-most
+            bool wasTopmost = false;
+            bool wasOverlayOpen = false;
+            bool wasClockOpen = false;
+            try
             {
-                AllowMultiple = false,
-                Title = "Select Media Folder"
-            });
-            var folder = result?.FirstOrDefault();
-            var selectedPath = folder?.TryGetLocalPath();
+                _suppressOverlayOpen = true; // block overlay toggle while dialog is open
+                wasTopmost = this.Topmost;
+                wasOverlayOpen = OverlayPopup?.IsOpen == true;
+                wasClockOpen = ClockPopup?.IsOpen == true;
+                if (OverlayPopup != null && OverlayPopup.IsOpen) OverlayPopup.IsOpen = false;
+                if (ClockPopup != null && ClockPopup.IsOpen) ClockPopup.IsOpen = false;
+                this.Topmost = false;
+                this.Activate();
+                await Task.Delay(50);
+            }
+            catch { }
+
+            // Prefer native modal dialog for reliability on Windows
+            string? selectedPath = null;
+            try
+            {
+                var result = await this.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+                {
+                    AllowMultiple = false,
+                    Title = "Select Media Folder"
+                });
+                var folder = result?.FirstOrDefault();
+                selectedPath = folder?.TryGetLocalPath();
+            }
+            catch { }
             if (!string.IsNullOrWhiteSpace(selectedPath))
             {
                 _config.MediaFolders = new List<string> { selectedPath! };
@@ -314,6 +358,19 @@ public partial class MainWindow : Window
                 await BuildPlaylistAsync();
                 ToggleOverlay(false);
                 PlayNext();
+            }
+            // Restore original top-most state and overlay suppression
+            try
+            {
+                this.Topmost = wasTopmost;
+                if (ClockPopup != null)
+                    ClockPopup.IsOpen = wasClockOpen; // restore clock visibility
+                try { UpdateClock(); } catch { }
+            }
+            catch { }
+            finally
+            {
+                _suppressOverlayOpen = false;
             }
         }
         catch { }
@@ -420,9 +477,63 @@ public partial class MainWindow : Window
             {
                 var json = File.ReadAllText(path);
                 _config = JsonSerializer.Deserialize<AppConfig>(json) ?? new AppConfig();
+                NormalizeConfigForCurrentOS(_config);
+            }
+            else
+            {
+                _config = new AppConfig();
+                NormalizeConfigForCurrentOS(_config);
             }
         }
         catch { /* fallback to defaults */ }
+    }
+
+    private static void NormalizeConfigForCurrentOS(AppConfig config)
+    {
+        try
+        {
+            // Media folders: remove obvious non-existent platform-specific defaults
+            if (config.MediaFolders == null || config.MediaFolders.Count == 0)
+            {
+                config.MediaFolders = new List<string> { Environment.GetFolderPath(Environment.SpecialFolder.MyVideos) };
+            }
+            else
+            {
+                var normalized = new List<string>();
+                foreach (var f in config.MediaFolders)
+                {
+                    if (string.IsNullOrWhiteSpace(f)) continue;
+                    var resolved = ResolveFolderPath(f);
+                    if (Directory.Exists(resolved))
+                    {
+                        normalized.Add(resolved);
+                    }
+                }
+                if (normalized.Count == 0)
+                {
+                    normalized.Add(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos));
+                }
+                config.MediaFolders = normalized.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            }
+
+            // LibVLC path: if configured but not valid on this OS, clear it
+            if (!string.IsNullOrWhiteSpace(config.LibVlcPath))
+            {
+                try
+                {
+                    var libName = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "libvlc.dylib"
+                        : RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "libvlc.dll"
+                        : "libvlc.so";
+                    var lib = Path.Combine(config.LibVlcPath, libName);
+                    if (!Directory.Exists(config.LibVlcPath) || !File.Exists(lib))
+                    {
+                        config.LibVlcPath = string.Empty;
+                    }
+                }
+                catch { config.LibVlcPath = string.Empty; }
+            }
+        }
+        catch { }
     }
 
     private static string GetLibVlcDirectory()
@@ -466,10 +577,43 @@ public partial class MainWindow : Window
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-                var winDefault = Path.Combine(programFiles, "VideoLAN", "VLC");
-                if (Directory.Exists(winDefault) && File.Exists(Path.Combine(winDefault, "libvlc.dll")))
-                    return winDefault;
+                // Common Windows locations
+                var candidates = new List<string>();
+                try
+                {
+                    var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                    var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+                    if (!string.IsNullOrEmpty(programFiles))
+                        candidates.Add(Path.Combine(programFiles, "VideoLAN", "VLC"));
+                    if (!string.IsNullOrEmpty(programFilesX86))
+                        candidates.Add(Path.Combine(programFilesX86, "VideoLAN", "VLC"));
+                }
+                catch { }
+
+                // Also scan PATH for libvlc.dll
+                try
+                {
+                    var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+                    var parts = pathEnv.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var p in parts)
+                    {
+                        var dir = p.Trim();
+                        if (string.IsNullOrWhiteSpace(dir)) continue;
+                        candidates.Add(dir);
+                    }
+                }
+                catch { }
+
+                foreach (var c in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var dll = Path.Combine(c, "libvlc.dll");
+                        if (File.Exists(dll))
+                            return c;
+                    }
+                    catch { }
+                }
             }
             else
             {
@@ -900,7 +1044,8 @@ public partial class MainWindow : Window
             var status = this.FindControl<TextBlock>("StatusText");
             if (status == null) return;
             var firstFolder = _config.MediaFolders.FirstOrDefault() ?? "(none)";
-            status.Text = $"Folder: {firstFolder}   Queue: {_playlist.Count}   Now: {Path.GetFileName(_currentItem)}";
+            var vlcStatus = _libVlcInitFailed ? "VLC: missing" : (_libVlc == null ? "VLC: not ready" : "VLC: ok");
+            status.Text = $"Folder: {firstFolder}   Queue: {_playlist.Count}   Now: {Path.GetFileName(_currentItem)}   {vlcStatus}";
         }
         catch { }
     }
