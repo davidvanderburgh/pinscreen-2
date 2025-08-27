@@ -33,6 +33,7 @@ public partial class MainWindow : Window
     private Avalonia.Point _dragStartClockPos;
     private const double ClockEdgePadding = 8.0;
     private string _clockColorHex = "#FFFFFFFF";
+    private int _delaySeconds = 3;
     // Expose config for overlay window
     public AppConfig Config => _config;
 
@@ -76,6 +77,7 @@ public partial class MainWindow : Window
         _clockXPercent = Math.Clamp(_config.ClockXPercent, 0, 100);
         _clockYPercent = Math.Clamp(_config.ClockYPercent, 0, 100);
         _clockColorHex = string.IsNullOrWhiteSpace(_config.ClockColor) ? _clockColorHex : _config.ClockColor;
+        _delaySeconds = Math.Clamp(_config.DelaySeconds, 0, 10);
         SetupClock();
         this.AttachedToVisualTree += (_, __) =>
         {
@@ -140,6 +142,8 @@ public partial class MainWindow : Window
         {
             var fontCombo = this.FindControl<ComboBox>("ClockFontCombo");
             var colorCombo = this.FindControl<ComboBox>("ClockColorCombo");
+            var delaySlider = this.FindControl<Slider>("DelaySlider");
+            var delayValueText = this.FindControl<TextBlock>("DelayValueText");
             if (fontCombo == null) return;
             var externalFontsDir = Path.Combine(AppContext.BaseDirectory, "Assets", "Fonts");
             var items = new List<string>();
@@ -172,6 +176,12 @@ public partial class MainWindow : Window
                         break;
                     }
                 }
+            }
+            if (delaySlider != null)
+            {
+                delaySlider.Value = _delaySeconds;
+                if (delayValueText != null)
+                    delayValueText.Text = $"{_delaySeconds}s";
             }
         }
         catch { }
@@ -578,6 +588,20 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    private void OnDelayChanged(object? sender, RangeBaseValueChangedEventArgs e)
+    {
+        try
+        {
+            _delaySeconds = (int)Math.Round(Math.Clamp(e.NewValue, 0, 10));
+            _config.DelaySeconds = _delaySeconds;
+            SaveConfig();
+            var delayValueText = this.FindControl<TextBlock>("DelayValueText");
+            if (delayValueText != null)
+                delayValueText.Text = $"{_delaySeconds}s";
+        }
+        catch { }
+    }
+
     private void ApplyClockFontSafely(string fileOrFamily)
     {
         if (ClockText == null) return;
@@ -829,6 +853,7 @@ public partial class MainWindow : Window
 
         if (_playlist.Count == 0)
         {
+            try { _mediaPlayer?.Stop(); } catch { }
             _ = BuildPlaylistAsync().ContinueWith(_ =>
             {
                 if (_playlist.Count > 0)
@@ -840,8 +865,25 @@ public partial class MainWindow : Window
         }
 
         _currentItem = _playlist.Dequeue();
-        var media = new Media(_libVlc, _currentItem, FromType.FromPath);
-        _mediaPlayer.Play(media);
+        // Apply delay if configured
+        if (_delaySeconds > 0)
+        {
+            var delay = TimeSpan.FromSeconds(_delaySeconds);
+            Dispatcher.UIThread.Post(async () =>
+            {
+                // Stop to ensure the screen returns to black during the delay
+                try { _mediaPlayer?.Stop(); } catch { }
+                try { await Task.Delay(delay); } catch { }
+                if (_mediaPlayer == null || _libVlc == null) return;
+                var mediaDelayed = new Media(_libVlc, _currentItem, FromType.FromPath);
+                _mediaPlayer.Play(mediaDelayed);
+            }, DispatcherPriority.Background);
+        }
+        else
+        {
+            var media = new Media(_libVlc, _currentItem, FromType.FromPath);
+            _mediaPlayer.Play(media);
+        }
 
         UpdateStatus();
     }
@@ -871,4 +913,5 @@ public class AppConfig
     public double ClockYPercent { get; set; } = 50.0;
     public string ClockFontFamily { get; set; } = string.Empty; // file path or family name
     public string ClockColor { get; set; } = "#FFFFFFFF";
+    public int DelaySeconds { get; set; } = 3;
 }
