@@ -81,7 +81,7 @@ public partial class MainWindow : Window
                     VideoView.MediaPlayer = _mediaPlayer;
                     _mediaPlayer.EndReached += (_, __) => Dispatcher.UIThread.Post(PlayNext);
                     // Ensure overlay is hidden so VideoView is visible
-                    try { if (OverlayBackdrop != null) OverlayBackdrop.IsVisible = false; } catch { }
+                    try { if (OverlayPopup != null) OverlayPopup.IsOpen = false; } catch { }
                     PlayNext();
                 }
             }, DispatcherPriority.Render);
@@ -92,31 +92,37 @@ public partial class MainWindow : Window
         {
             VideoView.MediaPlayer = _mediaPlayer;
             _mediaPlayer.EndReached += (_, __) => Dispatcher.UIThread.Post(PlayNext);
-            try { if (OverlayBackdrop != null) OverlayBackdrop.IsVisible = false; } catch { }
+            try { if (OverlayPopup != null) OverlayPopup.IsOpen = false; } catch { }
             PlayNext();
         }
 
-        // Launch floating overlay window to guarantee clock/overlay above native video
-        try
-        {
-            var overlay = new OverlayWindow(this);
-            overlay.Show();
-        }
-        catch { }
+        // Removed external OverlayWindow to keep overlay contained within the app window
     }
 
     private void ToggleOverlay(bool? force = null)
     {
-        if (OverlayBackdrop == null) return;
-        var newState = force ?? !OverlayBackdrop.IsVisible;
-        OverlayBackdrop.IsVisible = newState;
+        try
+        {
+            if (OverlayPopup == null) return;
+            var newState = force ?? !OverlayPopup.IsOpen;
+            OverlayPopup.IsOpen = newState;
+        }
+        catch { }
     }
 
     private void OnRootPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        // Defer to avoid same-event close/open issues
+        // Only open overlay when closed; closing handled by backdrop/Escape
         e.Handled = true;
-        Dispatcher.UIThread.Post(() => ToggleOverlay(), DispatcherPriority.Background);
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                if (OverlayPopup != null && !OverlayPopup.IsOpen)
+                    ToggleOverlay(true);
+            }
+            catch { }
+        }, DispatcherPriority.Background);
     }
 
     private void OnOverlayBackdropPressed(object? sender, PointerPressedEventArgs e)
@@ -395,7 +401,21 @@ public partial class MainWindow : Window
     private void UpdateClock()
     {
         var now = DateTime.Now.ToString(_config.ClockFormat);
-        ClockText.Text = now;
+        try
+        {
+            if (ClockText != null)
+            {
+                ClockText.Text = now;
+                return;
+            }
+        }
+        catch { }
+        try
+        {
+            var clock = this.FindControl<TextBlock>("ClockText");
+            if (clock != null) clock.Text = now;
+        }
+        catch { }
     }
 
     private async Task BuildPlaylistAsync()

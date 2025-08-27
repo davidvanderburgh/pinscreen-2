@@ -8,49 +8,68 @@
         Title="Pinscreen 2"
         CanResize="True"
         Background="#000000">
-    <Grid PointerPressed="OnRootPointerPressed">
+    <Grid Name="RootGrid" PointerPressed="OnRootPointerPressed">
         <vlc:VideoView Name="VideoView" />
-        <Border Background="#66000000" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="0" IsHitTestVisible="False">
-            <TextBlock Name="ClockText"
-                       Margin="16"
-                       Foreground="White"
-                       FontSize="72"
-                       FontWeight="Bold"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Center"
-                       TextAlignment="Center"
-                       Text="--:--:--" />
-        </Border>
 
-        <!-- Overlay -->
-        <Border Name="OverlayBackdrop"
-                Background="#80000000"
-                IsVisible="False"
-                PointerPressed="OnOverlayBackdropPressed">
-            <Border Name="OverlayPanel"
-                    Background="#222222"
-                    CornerRadius="8"
-                    Padding="16"
-                    MaxWidth="520"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
-                    PointerPressed="OnOverlayPanelPressed">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Pinscreen Options" FontSize="24" Foreground="White"/>
-                    <Separator/>
-                    <WrapPanel>
-                        <Button Name="BtnPlayPause" Margin="0,0,8,8" Click="OnPlayPauseClicked">Play/Pause</Button>
-                        <Button Margin="0,0,8,8" Click="OnNextClicked">Next</Button>
-                        <Button Margin="0,0,8,8" Click="OnRebuildQueueClicked">Rebuild Queue</Button>
-                        <Button Margin="0,0,8,8" Click="OnSetMediaFolderClicked">Set Media Folder…</Button>
-                        <Button Margin="0,0,8,8" Click="OnOpenConfigClicked">Open Config</Button>
-                        <Button Margin="0,0,8,8" Click="OnOpenCurrentFolderClicked">Open Current Folder</Button>
-                        <Button Margin="0,0,8,8" Click="OnQuitClicked">Quit</Button>
-                    </WrapPanel>
-                    <TextBlock Name="StatusText" Foreground="#CCCCCC"/>
-                    <TextBlock Text="Tip: click anywhere to toggle this overlay. Press Esc to close." Foreground="#CCCCCC"/>
-                </StackPanel>
+        <!-- Clock as Popup so it renders above native VideoView but below overlay -->
+        <Popup Name="ClockPopup"
+               PlacementTarget="{Binding ElementName=RootGrid}"
+               Placement="AnchorAndGravity"
+               PlacementAnchor="TopLeft"
+               PlacementGravity="BottomRight"
+               IsOpen="True">
+            <Border Background="#00000000" PointerPressed="OnRootPointerPressed"
+                    Width="{Binding $parent[Popup].PlacementTarget.Bounds.Width}"
+                    Height="{Binding $parent[Popup].PlacementTarget.Bounds.Height}">
+                <TextBlock Name="ClockText"
+                           Margin="16"
+                           Foreground="White"
+                           FontSize="72"
+                           FontWeight="Bold"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           TextAlignment="Center"
+                           Text="--:--:--" />
             </Border>
-        </Border>
+        </Popup>
+
+        <!-- Overlay shown via Popup to ensure it renders above native VideoView and clock, within app -->
+        <Popup Name="OverlayPopup"
+               PlacementTarget="{Binding ElementName=RootGrid}"
+               Placement="AnchorAndGravity"
+               PlacementAnchor="TopLeft"
+               PlacementGravity="BottomRight"
+               IsOpen="False">
+            <Grid Width="{Binding $parent[Popup].PlacementTarget.Bounds.Width}"
+                  Height="{Binding $parent[Popup].PlacementTarget.Bounds.Height}">
+                <Border Background="#80000000"
+                        PointerPressed="OnOverlayBackdropPressed">
+                    <Border Name="OverlayPanel"
+                            Background="#222222"
+                            CornerRadius="8"
+                            Padding="16"
+                            MaxWidth="520"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            PointerPressed="OnOverlayPanelPressed">
+                        <StackPanel Spacing="12">
+                            <TextBlock Text="Pinscreen Options" FontSize="24" Foreground="White"/>
+                            <Separator/>
+                            <WrapPanel>
+                                <Button Name="BtnPlayPause" Margin="0,0,8,8" Click="OnPlayPauseClicked">Play/Pause</Button>
+                                <Button Margin="0,0,8,8" Click="OnNextClicked">Next</Button>
+                                <Button Margin="0,0,8,8" Click="OnRebuildQueueClicked">Rebuild Queue</Button>
+                                <Button Margin="0,0,8,8" Click="OnSetMediaFolderClicked">Set Media Folder…</Button>
+                                <Button Margin="0,0,8,8" Click="OnOpenConfigClicked">Open Config</Button>
+                                <Button Margin="0,0,8,8" Click="OnOpenCurrentFolderClicked">Open Current Folder</Button>
+                                <Button Margin="0,0,8,8" Click="OnQuitClicked">Quit</Button>
+                            </WrapPanel>
+                            <TextBlock Name="StatusText" Foreground="#CCCCCC"/>
+                            <TextBlock Text="Tip: click anywhere to toggle this overlay. Press Esc to close." Foreground="#CCCCCC"/>
+                        </StackPanel>
+                    </Border>
+                </Border>
+            </Grid>
+        </Popup>
     </Grid>
 </Window>
