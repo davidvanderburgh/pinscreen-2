@@ -40,7 +40,7 @@ public partial class MainWindow : Window
     private bool _libVlcInitFailed = false;
     private bool _isInitializingUi = true;
     private string _effectiveConfigPath = string.Empty;
-    private const string GitHubUpdateRepo = "dvanderburgh/pinscreen-2"; // permanently linked repo
+    private const string GitHubUpdateRepo = "davidvanderburgh/pinscreen-2"; // permanently linked repo
     // Expose config for overlay window
     public AppConfig Config => _config;
 
