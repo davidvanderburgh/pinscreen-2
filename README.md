@@ -152,3 +152,37 @@ dotnet run --project Pinscreen2.App
   - Alternatively, add VLC to your PATH and restart the app from the same shell.
 - The queue rebuilds automatically when it reaches the end.
 
+## Helper scripts
+
+Prereqs:
+- PowerShell execution policy allows running local scripts (recommended):
+  - Set for current user: `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force`
+- GitHub CLI installed and authenticated: `gh --version` and `gh auth login`
+
+### version.ps1
+Tags the repo, publishes for a single runtime, zips, and creates/updates the GitHub release.
+
+Examples:
+```powershell
+./version.ps1 v1.2.3 win-x64 "Release v1.2.3"
+./version.ps1 v1.2.3 osx-arm64
+```
+
+### publish.ps1
+Publishes the app for a runtime; optional `-Zip` creates `Pinscreen2-<rid>.zip`.
+
+Examples:
+```powershell
+./publish.ps1 win-x64
+./publish.ps1 win-x64 -Zip
+```
+
+### release.ps1
+End-to-end release across multiple runtimes by invoking `version.ps1` per RID.
+
+Examples:
+```powershell
+./release.ps1 v1.2.3 -Runtimes win-x64,osx-arm64,linux-x64 -Notes "Release v1.2.3"
+./release.ps1 v1.2.3 -Runtimes win-x64
+```
+
