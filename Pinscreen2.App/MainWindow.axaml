@@ -7,6 +7,7 @@
         x:Class="Pinscreen2.App.MainWindow"
         Title="Pinscreen 2"
         CanResize="True"
+        WindowState="FullScreen"
         Background="#000000">
     <Grid Name="RootGrid" PointerPressed="OnRootPointerPressed">
         <vlc:VideoView Name="VideoView" />
@@ -61,6 +62,7 @@
                                 <Button Margin="0,0,8,8" Click="OnNextClicked">Next</Button>
                                 <Button Margin="0,0,8,8" Click="OnRebuildQueueClicked">Rebuild Queue</Button>
                                 <Button Margin="0,0,8,8" Click="OnSetMediaFolderClicked">Set Media Folder…</Button>
+                                <Button Margin="0,0,8,8" Click="OnToggleFullscreenClicked">Toggle Fullscreen</Button>
                                 <Button Margin="0,0,8,8" Click="OnOpenConfigClicked">Open Config</Button>
                                 <Button Margin="0,0,8,8" Click="OnOpenCurrentFolderClicked">Open Current Folder</Button>
                                 <Button Margin="0,0,8,8" Click="OnQuitClicked">Quit</Button>

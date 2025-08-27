@@ -266,6 +266,11 @@ public partial class MainWindow : Window
         {
             ToggleOverlay(force: false);
         }
+        else if (e.Key == Key.F11)
+        {
+            ToggleFullscreen();
+            e.Handled = true;
+        }
     }
 
     private void OnPlayPauseClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -400,6 +405,23 @@ public partial class MainWindow : Window
     private void OnQuitClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         Close();
+    }
+
+    private void OnToggleFullscreenClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        ToggleFullscreen();
+    }
+
+    private void ToggleFullscreen()
+    {
+        try
+        {
+            if (WindowState == WindowState.FullScreen)
+                WindowState = WindowState.Normal;
+            else
+                WindowState = WindowState.FullScreen;
+        }
+        catch { }
     }
     private static void SetPlatformLibraryEnv(string libVlcDirectory)
     {
