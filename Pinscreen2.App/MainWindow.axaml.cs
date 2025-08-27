@@ -712,28 +712,42 @@ public partial class MainWindow : Window
             }
         });
 
+        // Randomize order each build
+        var rng = new Random();
         IEnumerable<string> finalOrder = collected;
         if (_config.BalanceQueueByGame)
         {
-            // Simple grouping by immediate parent folder name
-            var groups = collected.GroupBy(p => new DirectoryInfo(Path.GetDirectoryName(p) ?? string.Empty).Name)
-                                  .Select(g => new Queue<string>(g))
-                                  .ToList();
+            // Group by immediate parent folder name
+            var grouped = collected
+                .GroupBy(p => new DirectoryInfo(Path.GetDirectoryName(p) ?? string.Empty).Name)
+                // Shuffle items within each group
+                .Select(g => g.OrderBy(_ => rng.Next()).ToList())
+                .ToList();
+
+            // Shuffle group order
+            grouped = grouped.OrderBy(_ => rng.Next()).ToList();
+
+            // Interleave one item from each group until all exhausted
+            var queues = grouped.Select(g => new Queue<string>(g)).ToList();
             var interleaved = new List<string>();
             bool added;
             do
             {
                 added = false;
-                foreach (var g in groups)
+                foreach (var q in queues)
                 {
-                    if (g.Count > 0)
+                    if (q.Count > 0)
                     {
-                        interleaved.Add(g.Dequeue());
+                        interleaved.Add(q.Dequeue());
                         added = true;
                     }
                 }
             } while (added);
             finalOrder = interleaved;
+        }
+        else
+        {
+            finalOrder = collected.OrderBy(_ => rng.Next()).ToList();
         }
 
         _playlist.Clear();
