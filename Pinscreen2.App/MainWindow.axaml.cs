@@ -473,6 +473,7 @@ public partial class MainWindow : Window
                     WorkingDirectory = appDir,
                     ArgumentList = { appDir, zipPath!, exeName }
                 };
+                try { psi.ArgumentList.Add(System.Diagnostics.Process.GetCurrentProcess().Id.ToString()); } catch { }
                 System.Diagnostics.Process.Start(psi);
             }
             catch (Exception ex)
@@ -619,6 +620,7 @@ public partial class MainWindow : Window
                 psi.ArgumentList.Add(appDir);
                 psi.ArgumentList.Add(tmpFile);
                 psi.ArgumentList.Add(exeName);
+                try { psi.ArgumentList.Add(System.Diagnostics.Process.GetCurrentProcess().Id.ToString()); } catch { }
                 System.Diagnostics.Process.Start(psi);
                 Close();
             }

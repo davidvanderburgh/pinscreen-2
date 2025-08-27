@@ -114,21 +114,14 @@ git tag -a $ver -m "Pinscreen 2 $ver"
 git push origin $ver
 ```
 
+Or use the helper script:
+```powershell
+./version.ps1 v0.1.0
+```
+
 2) Build and zip artifacts (Windows example; repeat for other platforms as needed)
 ```powershell
-Remove-Item -Recurse -Force .\publish -ErrorAction Ignore
-
-# Windows x64
-dotnet publish Pinscreen2.App -c Release -r win-x64 --self-contained true `
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false `
-  -o .\publish\win-x64
-
-# Include updater next to app (ensure it's built in Release)
-dotnet build .\Pinscreen2.Updater\Pinscreen2.Updater.csproj -c Release
-Copy-Item .\Pinscreen2.Updater\bin\Release\net9.0\* .\publish\win-x64 -Recurse -Force
-
-# Zip (name should include runtime for matching)
-Compress-Archive -Path .\publish\win-x64\* -DestinationPath .\Pinscreen2-win-x64.zip -Force
+./publish.ps1 win-x64 -Zip
 ```
 
 3) Create the GitHub Release and upload assets

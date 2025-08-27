@@ -22,6 +22,13 @@
     <PackageReference Include="LibVLCSharp.Avalonia" Version="3.9.4" />
   </ItemGroup>
 
+  <!-- Ensure Updater project is built; we don't reference its output as a library -->
+  <ItemGroup>
+    <ProjectReference Include="..\Pinscreen2.Updater\Pinscreen2.Updater.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+  </ItemGroup>
+
   
 
   <ItemGroup>
@@ -33,4 +40,18 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <!-- After publishing the app, publish the Updater self-contained for the same RID and drop it into PublishDir -->
+  <Target Name="IncludeUpdaterInPublish" AfterTargets="Publish" Condition=" '$(RuntimeIdentifier)' != '' ">
+    <PropertyGroup>
+      <UpdaterProj>$(MSBuildThisFileDirectory)..\Pinscreen2.Updater\Pinscreen2.Updater.csproj</UpdaterProj>
+      <UpdaterOut>$(PublishDir)updater-tmp\</UpdaterOut>
+    </PropertyGroup>
+    <Exec Command='dotnet publish &quot;$(UpdaterProj)&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -o &quot;$(UpdaterOut)&quot;' />
+    <ItemGroup>
+      <PublishedUpdater Include="$(UpdaterOut)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PublishedUpdater)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <RemoveDir Directories="$(UpdaterOut)" />
+  </Target>
 </Project>
