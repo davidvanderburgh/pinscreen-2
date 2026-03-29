@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runtime: win-x64
+            os: windows-latest
+          - runtime: osx-arm64
+            os: macos-latest
+          - runtime: linux-x64
+            os: ubuntu-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish
+        run: >
+          dotnet publish Pinscreen2.App/Pinscreen2.App.csproj
+          -c Release
+          -r ${{ matrix.runtime }}
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:PublishTrimmed=false
+          -o publish/${{ matrix.runtime }}
+
+      - name: Zip
+        shell: bash
+        run: |
+          cd publish/${{ matrix.runtime }}
+          zip -r ../../Pinscreen2-${{ matrix.runtime }}.zip .
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} Pinscreen2-${{ matrix.runtime }}.zip --clobber
