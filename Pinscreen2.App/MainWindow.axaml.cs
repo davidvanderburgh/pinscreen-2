@@ -1029,7 +1029,7 @@ public partial class MainWindow : Window
                 try
                 {
                     var root = this.FindControl<Grid>("RootGrid");
-                    if (root != null)
+                    if (root != null && root.Bounds.Width > 1 && root.Bounds.Height > 1)
                     {
                         // Measure the text to get accurate size for clamping
                         ClockText.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
