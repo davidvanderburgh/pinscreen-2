@@ -40,11 +40,17 @@ jobs:
           -p:PublishTrimmed=false
           -o publish/${{ matrix.runtime }}
 
-      - name: Zip
+      - name: Zip (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           cd publish/${{ matrix.runtime }}
           zip -r ../../Pinscreen2-${{ matrix.runtime }}.zip .
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path publish/${{ matrix.runtime }}/* -DestinationPath Pinscreen2-${{ matrix.runtime }}.zip
 
       - name: Upload release asset
         env:
