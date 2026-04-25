@@ -104,6 +104,28 @@ public partial class MainWindow : Window
         {
             try { UpdateClock(); } catch { }
             try { UpdateVersionInfo(); } catch { }
+            try
+            {
+                var root = this.FindControl<Grid>("RootGrid");
+                if (root != null)
+                {
+                    root.LayoutUpdated += (_, __) => UpdateClock();
+                    root.PropertyChanged += (_, ev) =>
+                    {
+                        if (ev.Property == Visual.BoundsProperty) UpdateClock();
+                    };
+                }
+                this.PropertyChanged += (_, ev) =>
+                {
+                    if (ev.Property == Window.WindowStateProperty
+                        || ev.Property == Visual.BoundsProperty
+                        || ev.Property == Window.ClientSizeProperty)
+                    {
+                        Dispatcher.UIThread.Post(UpdateClock, DispatcherPriority.Background);
+                    }
+                };
+            }
+            catch { }
         };
         await BuildPlaylistAsync();
 
@@ -1209,6 +1231,24 @@ public partial class MainWindow : Window
         _clockTimer.Tick += (_, __) => UpdateClock();
         _clockTimer.Start();
         UpdateClock();
+        try
+        {
+            if (ClockText != null)
+            {
+                ClockText.AttachedToVisualTree += (_, __) =>
+                {
+                    if (ClockText.Parent is Control parent)
+                    {
+                        parent.LayoutUpdated += (_, __) => UpdateClock();
+                        parent.PropertyChanged += (_, ev) =>
+                        {
+                            if (ev.Property == Visual.BoundsProperty) UpdateClock();
+                        };
+                    }
+                };
+            }
+        }
+        catch { }
     }
 
     private void UpdateClock()
@@ -1227,17 +1267,25 @@ public partial class MainWindow : Window
                 // Apply color
                 try { ClockText.Foreground = new SolidColorBrush(Color.Parse(_clockColorHex)); } catch { }
                 ClockText.Text = now;
-                // Position clock based on percentage within the RootGrid
+                // Position clock based on percentage within the clock's actual container
                 try
                 {
+                    var container = ClockText.Parent as Control;
                     var root = this.FindControl<Grid>("RootGrid");
-                    if (root != null && root.Bounds.Width > 1 && root.Bounds.Height > 1)
+                    double cw = container?.Bounds.Width ?? 0;
+                    double ch = container?.Bounds.Height ?? 0;
+                    // Fall back to the window/root if the container hasn't laid out yet
+                    if ((cw <= 1 || ch <= 1) && root != null)
                     {
-                        // Measure the text to get accurate size for clamping
+                        cw = root.Bounds.Width;
+                        ch = root.Bounds.Height;
+                    }
+                    if (cw > 1 && ch > 1)
+                    {
                         ClockText.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
                         var textSize = ClockText.DesiredSize;
-                        var width = Math.Max(0, root.Bounds.Width - (ClockEdgePadding * 2));
-                        var height = Math.Max(0, root.Bounds.Height - (ClockEdgePadding * 2));
+                        var width = Math.Max(0, cw - (ClockEdgePadding * 2));
+                        var height = Math.Max(0, ch - (ClockEdgePadding * 2));
                         var maxLeft = Math.Max(0, width - textSize.Width);
                         var maxTop = Math.Max(0, height - textSize.Height);
                         var x = ClockEdgePadding + maxLeft * (_clockXPercent / 100.0);
@@ -1526,32 +1574,67 @@ public partial class MainWindow : Window
         IEnumerable<string> finalOrder = collected;
         if (_config.BalanceQueueByGame)
         {
-            // Group by immediate parent folder name
-            var grouped = collected
-                .GroupBy(p => GetGroupKey(p))
-                // Shuffle items within each group
-                .Select(g => g.OrderBy(_ => rng.Next()).ToList())
+            // Two-level interleave: outer loop rotates SIZE BUCKETS so adjacent
+            // items have different visual formats (tiny DMD vs full LCD), inner
+            // loop rotates GAMES within each bucket so adjacent same-bucket
+            // items are different games.
+            //
+            // Each (game, bucket) is a queue, shuffled. Per bucket, a
+            // game-round-robin sequence is built. Then we round-robin across
+            // those bucket sequences.
+
+            var perKey = collected
+                .GroupBy(GetGroupKey) // "<game>|<bucket>"
+                .ToDictionary(
+                    g => g.Key,
+                    g => new Queue<string>(g.OrderBy(_ => rng.Next())));
+
+            // bucket -> ordered list of game-keys for round-robin
+            var bucketToKeys = perKey.Keys
+                .GroupBy(k => k.Substring(k.LastIndexOf('|') + 1))
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderBy(_ => rng.Next()).ToList());
+
+            // Build a game-interleaved sequence for each bucket.
+            var bucketQueues = bucketToKeys
+                .OrderBy(_ => rng.Next())
+                .Select(kv =>
+                {
+                    var seq = new List<string>();
+                    bool any;
+                    do
+                    {
+                        any = false;
+                        foreach (var key in kv.Value)
+                        {
+                            if (perKey[key].Count > 0)
+                            {
+                                seq.Add(perKey[key].Dequeue());
+                                any = true;
+                            }
+                        }
+                    } while (any);
+                    return new Queue<string>(seq);
+                })
                 .ToList();
 
-            // Shuffle group order
-            grouped = grouped.OrderBy(_ => rng.Next()).ToList();
-
-            // Interleave one item from each group until all exhausted
-            var queues = grouped.Select(g => new Queue<string>(g)).ToList();
+            // Outer round-robin across buckets so adjacent items differ in size class.
             var interleaved = new List<string>();
-            bool added;
+            bool moreOuter;
             do
             {
-                added = false;
-                foreach (var q in queues)
+                moreOuter = false;
+                foreach (var bq in bucketQueues)
                 {
-                    if (q.Count > 0)
+                    if (bq.Count > 0)
                     {
-                        interleaved.Add(q.Dequeue());
-                        added = true;
+                        interleaved.Add(bq.Dequeue());
+                        moreOuter = true;
                     }
                 }
-            } while (added);
+            } while (moreOuter);
+
             finalOrder = interleaved;
         }
         else
@@ -1628,7 +1711,15 @@ public partial class MainWindow : Window
 
     private static string GetGroupKey(string item)
     {
-        return new DirectoryInfo(Path.GetDirectoryName(item) ?? string.Empty).Name;
+        // Group by (game, coarse-size-bucket) so multi-format games (e.g. tiny
+        // amber-DMD strips alongside full-resolution LCD clips) interleave by
+        // both game AND visual format. File size is a cheap proxy for format.
+        var game = new DirectoryInfo(Path.GetDirectoryName(item) ?? string.Empty).Name;
+        long size = 0;
+        try { size = new FileInfo(item).Length; } catch { }
+        // log2 bucket grouped by 2 powers: <512KB, <2MB, <8MB, <32MB, <128MB, ≥128MB
+        int bucket = size <= 0 ? 0 : (int)Math.Floor(Math.Log2(size) / 2.0);
+        return game + "|" + bucket;
     }
 
     private void EnsureRemoteClient()
