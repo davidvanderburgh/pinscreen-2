@@ -114,6 +114,23 @@ New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\pinball-v
 
 Then invoke via natural-language prompts like *"curate pinball videos"* — see `.claude/skills/pinball-video-curator/SKILL.md` for thresholds, action modes (`--dry-run`, `--prune-dest`, etc.), and the folder→game `mapping.json`.
 
+## Kiosk debloat (Windows pinscreen)
+
+`scripts/debloat-kiosk.ps1` disables/uninstalls Windows components a kiosk display device doesn't need (telemetry, Search indexer, SysMain, Xbox, Print Spooler, Cortana, preinstalled UWP bloat, etc). Each section is opt-in via switches, with safer defaults on and riskier ones (Defender, OneDrive uninstall) gated behind explicit flags.
+
+```powershell
+# Dry-run first (admin PowerShell on the pinscreen)
+pwsh -File .\scripts\debloat-kiosk.ps1 -DryRun
+
+# Apply the safe defaults
+pwsh -File .\scripts\debloat-kiosk.ps1
+
+# Aggressive: also disable Defender real-time + remove OneDrive
+pwsh -File .\scripts\debloat-kiosk.ps1 -All
+```
+
+`-DisableDefender` requires Tamper Protection to already be off in Windows Security or the changes silently revert.
+
 ## Build
 
 ```bash
