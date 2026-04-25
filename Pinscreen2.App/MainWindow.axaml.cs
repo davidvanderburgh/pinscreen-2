@@ -878,20 +878,29 @@ public partial class MainWindow : Window
 
     private static bool IsAssetMatchForCurrentRuntime(string assetName)
     {
+        // Asset must be the App zip for this runtime, NOT the Server zip or
+        // any other auxiliary artifact. Match exactly: "pinscreen2-<rid>.zip".
         var name = assetName.ToLowerInvariant();
-        if (!name.EndsWith(".zip")) return false;
+        string[] rids;
         if (OperatingSystem.IsWindows())
         {
-            return name.Contains("win-x64") || name.Contains("windows") || name.Contains("win64") || name.Contains("win");
+            rids = new[] { "win-x64" };
         }
-        if (OperatingSystem.IsMacOS())
+        else if (OperatingSystem.IsMacOS())
         {
-            var isArm = RuntimeInformation.OSArchitecture == Architecture.Arm64;
-            return (isArm && (name.Contains("osx-arm64") || name.Contains("mac-arm64") || name.Contains("macos-arm64")))
-                || (!isArm && (name.Contains("osx-x64") || name.Contains("mac-x64") || name.Contains("macos-x64") || name.Contains("osx")));
+            rids = RuntimeInformation.OSArchitecture == Architecture.Arm64
+                ? new[] { "osx-arm64" }
+                : new[] { "osx-x64" };
         }
-        // Linux
-        return name.Contains("linux-x64") || name.Contains("linux");
+        else
+        {
+            rids = new[] { "linux-x64" };
+        }
+        foreach (var rid in rids)
+        {
+            if (name == $"pinscreen2-{rid}.zip") return true;
+        }
+        return false;
     }
 
     private async Task ShowMessageAsync(string text)
