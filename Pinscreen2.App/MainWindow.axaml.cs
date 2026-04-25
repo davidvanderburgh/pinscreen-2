@@ -234,6 +234,21 @@ public partial class MainWindow : Window
             var remoteUrlBox = this.FindControl<TextBox>("RemoteUrlBox");
             if (remoteUrlBox != null)
                 remoteUrlBox.Text = _config.RemoteLibraryUrl ?? string.Empty;
+            UpdateSyncFolderText();
+        }
+        catch { }
+    }
+
+    private void UpdateSyncFolderText()
+    {
+        try
+        {
+            var lbl = this.FindControl<TextBlock>("SyncFolderText");
+            if (lbl == null) return;
+            var dir = string.IsNullOrWhiteSpace(_config.RemoteCacheDir)
+                ? RemoteLibraryClient.DefaultCacheDir()
+                : _config.RemoteCacheDir;
+            lbl.Text = dir;
         }
         catch { }
     }
@@ -349,6 +364,62 @@ public partial class MainWindow : Window
             PlayNext();
         }
         catch (Exception ex) { Console.WriteLine($"Clear remote URL failed: {ex.Message}"); }
+    }
+
+    private async void OnSetSyncFolderClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            bool wasTopmost = false;
+            bool wasOverlayOpen = false;
+            bool wasClockOpen = false;
+            try
+            {
+                _suppressOverlayOpen = true;
+                wasTopmost = this.Topmost;
+                wasOverlayOpen = OverlayPopup?.IsOpen == true;
+                wasClockOpen = ClockPopup?.IsOpen == true;
+                if (OverlayPopup != null && OverlayPopup.IsOpen) OverlayPopup.IsOpen = false;
+                if (ClockPopup != null && ClockPopup.IsOpen) ClockPopup.IsOpen = false;
+                this.Topmost = false;
+                this.Activate();
+                await Task.Delay(50);
+            }
+            catch { }
+
+            string? selectedPath = null;
+            try
+            {
+                var result = await this.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+                {
+                    AllowMultiple = false,
+                    Title = "Select Sync Folder"
+                });
+                var folder = result?.FirstOrDefault();
+                selectedPath = folder?.TryGetLocalPath();
+            }
+            catch { }
+
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                _config.RemoteCacheDir = selectedPath!;
+                _remoteClient = null;
+                SaveConfig();
+                UpdateSyncFolderText();
+                await BuildPlaylistAsync();
+                UpdateStatus();
+            }
+
+            try
+            {
+                this.Topmost = wasTopmost;
+                if (ClockPopup != null) ClockPopup.IsOpen = wasClockOpen;
+                try { UpdateClock(); } catch { }
+            }
+            catch { }
+            finally { _suppressOverlayOpen = false; }
+        }
+        catch { }
     }
 
     private async void OnSyncNowClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
