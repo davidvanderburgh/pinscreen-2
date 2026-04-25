@@ -111,6 +111,7 @@
                                 <TextBox Name="RemoteUrlBox" Width="360" Watermark="http://server:8080"/>
                                 <Button Foreground="White" Click="OnApplyRemoteUrlClicked">Apply</Button>
                                 <Button Foreground="White" Click="OnClearRemoteUrlClicked">Clear</Button>
+                                <Button Foreground="White" Click="OnSyncNowClicked">Sync Now</Button>
                             </StackPanel>
                         </StackPanel>
                     </Border>
