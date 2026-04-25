@@ -41,3 +41,6 @@ Pinscreen2.App/*.deps.json
 **/publish/
 videos/
 
+# Claude Code per-user settings
+.claude/settings.local.json
+

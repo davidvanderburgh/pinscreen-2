@@ -102,6 +102,18 @@ In the app overlay, set **Remote library URL** to `http://<hostname>:8088`, hit 
 
 The cache directory defaults to `%LOCALAPPDATA%/Pinscreen2/cache` on Windows (and the equivalent on macOS/Linux); override via `RemoteCacheDir` in config.
 
+## Populating the library (Claude Code skill)
+
+A Claude Code skill at `.claude/skills/pinball-video-curator/` automates curating videos extracted from pinball machines into `D:\Pinball\videos\<Game Name>\`. It probes each source file with `ffprobe`, applies an adaptive per-game aspect-ratio cluster filter (so multi-display games keep their main + sub displays and DMD-only games keep their narrow strip), drops short/blacklisted/junk files, and copies survivors into the library.
+
+Symlink (or copy) the folder into your Claude config to use it:
+
+```powershell
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\pinball-video-curator" -Target "$(Resolve-Path .claude\skills\pinball-video-curator)"
+```
+
+Then invoke via natural-language prompts like *"curate pinball videos"* — see `.claude/skills/pinball-video-curator/SKILL.md` for thresholds, action modes (`--dry-run`, `--prune-dest`, etc.), and the folder→game `mapping.json`.
+
 ## Build
 
 ```bash
