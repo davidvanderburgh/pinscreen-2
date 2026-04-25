@@ -51,9 +51,11 @@
                             CornerRadius="8"
                             Padding="16"
                             MaxWidth="840"
+                            MaxHeight="{Binding $parent[Popup].PlacementTarget.Bounds.Height}"
                             HorizontalAlignment="Center"
                             VerticalAlignment="Center"
                             PointerPressed="OnOverlayPanelPressed">
+                        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                         <StackPanel Spacing="12">
                             <TextBlock Text="Pinscreen Options" FontSize="24" Foreground="White"/>
                             <Separator/>
@@ -114,7 +116,32 @@
                                 <Button Foreground="White" Click="OnSyncNowClicked">Sync Now</Button>
                             </StackPanel>
                         </StackPanel>
+                        </ScrollViewer>
                     </Border>
+                </Border>
+            </Grid>
+        </Popup>
+
+        <!-- Floating sync HUD: visible during sync regardless of overlay state -->
+        <Popup Name="SyncHudPopup"
+               PlacementTarget="{Binding ElementName=RootGrid}"
+               Placement="AnchorAndGravity"
+               PlacementAnchor="TopLeft"
+               PlacementGravity="BottomRight"
+               IsOpen="False">
+            <Grid Width="{Binding $parent[Popup].PlacementTarget.Bounds.Width}">
+                <Border Background="#CC000000"
+                        CornerRadius="8"
+                        Padding="14,10"
+                        Margin="16"
+                        MaxWidth="700"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top">
+                    <StackPanel Spacing="6">
+                        <TextBlock Name="SyncHudText" Foreground="White" FontSize="14" TextWrapping="Wrap"/>
+                        <ProgressBar Name="SyncHudBar" Minimum="0" Maximum="100" Value="0" Height="8"/>
+                        <TextBlock Name="SyncHudDetail" Foreground="#CCCCCC" FontSize="12"/>
+                    </StackPanel>
                 </Border>
             </Grid>
         </Popup>

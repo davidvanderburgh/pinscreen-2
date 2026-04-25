@@ -360,12 +360,14 @@ public partial class MainWindow : Window
             return;
         }
         _isSyncing = true;
+        ShowSyncHud(true);
         try
         {
             EnsureRemoteClient();
             var progress = new Progress<SyncProgress>(p =>
             {
                 _remoteStatus = p.Message ?? string.Empty;
+                UpdateSyncHud(p);
                 UpdateStatus();
             });
             var result = await _remoteClient!.SyncAsync(progress);
@@ -392,7 +394,55 @@ public partial class MainWindow : Window
         finally
         {
             _isSyncing = false;
+            ShowSyncHud(false);
         }
+    }
+
+    private void ShowSyncHud(bool visible)
+    {
+        try
+        {
+            var hud = this.FindControl<Popup>("SyncHudPopup");
+            if (hud != null) hud.IsOpen = visible;
+        }
+        catch { }
+    }
+
+    private void UpdateSyncHud(SyncProgress p)
+    {
+        try
+        {
+            var text = this.FindControl<TextBlock>("SyncHudText");
+            var bar = this.FindControl<ProgressBar>("SyncHudBar");
+            var detail = this.FindControl<TextBlock>("SyncHudDetail");
+            if (text != null) text.Text = string.IsNullOrEmpty(p.Message) ? "Syncing…" : p.Message;
+            if (bar != null)
+            {
+                if (p.BytesNeeded > 0)
+                {
+                    bar.IsIndeterminate = false;
+                    bar.Value = Math.Clamp(100.0 * p.BytesDownloaded / p.BytesNeeded, 0, 100);
+                }
+                else
+                {
+                    bar.IsIndeterminate = !p.Done;
+                }
+            }
+            if (detail != null)
+            {
+                if (p.FilesTotal > 0)
+                {
+                    var done = p.FilesDownloaded + p.FilesSkipped;
+                    detail.Text = $"{done}/{p.FilesTotal} files   {RemoteLibraryClient.FormatBytes(p.BytesDownloaded)} / {RemoteLibraryClient.FormatBytes(p.BytesNeeded)}"
+                                  + (p.FilesSkipped > 0 ? $"   ({p.FilesSkipped} skipped)" : string.Empty);
+                }
+                else
+                {
+                    detail.Text = string.Empty;
+                }
+            }
+        }
+        catch { }
     }
 
     private void OnOpenConfigClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
