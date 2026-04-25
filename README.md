@@ -72,6 +72,36 @@ Other optional fields (saved by the app): `ClockFontFamily`, `ClockColor`, `Cloc
 
 Supported extensions: `.mp4`, `.mov`, `.m4v`, `.mkv`, `.avi`, `.webm`
 
+## Remote library (sync)
+
+Instead of scanning local folders, the app can pull videos from a `Pinscreen2.Server` instance running on another machine on your LAN. Files are downloaded into a local cache via an explicit **Sync Now** button (no streaming during playback), so the device works offline once synced.
+
+### Run the server
+
+The server (`Pinscreen2.Server`) exposes a manifest + file endpoints over HTTP.
+
+1. Publish it to a stable location on the source machine:
+   ```powershell
+   dotnet publish Pinscreen2.Server -c Release -r win-x64 --self-contained false -o D:\Pinball\Pinscreen2Server
+   ```
+2. Drop a `server-config.json` next to the exe:
+   ```json
+   { "Root": "D:\\Pinball\\videos", "Port": 8088 }
+   ```
+3. Allow the port through Windows Firewall (one-time, admin PowerShell):
+   ```powershell
+   New-NetFirewallRule -DisplayName "Pinscreen2 Server" -Direction Inbound -Protocol TCP -LocalPort 8088 -Action Allow -Profile Private,Domain
+   ```
+4. Optional auto-start on login: place a shortcut in the user's Startup folder pointing at a hidden launcher (`wscript.exe start-hidden.vbs`) so the server runs without a console window.
+
+Sanity check from another machine: `http://<hostname>:8088/manifest.json` should return a JSON list of every video.
+
+### Configure the client
+
+In the app overlay, set **Remote library URL** to `http://<hostname>:8088`, hit **Apply**, then **Sync Now**. Sync diffs the manifest against the local cache, checks free disk space (with 1 GB headroom), and downloads anything missing — files that won't fit are skipped and reported. Future syncs only pull new files.
+
+The cache directory defaults to `%LOCALAPPDATA%/Pinscreen2/cache` on Windows (and the equivalent on macOS/Linux); override via `RemoteCacheDir` in config.
+
 ## Build
 
 ```bash
@@ -101,7 +131,17 @@ Artifacts are under `Pinscreen2.App/bin/Release/<tfm>/<rid>/publish/`.
 
 ## Releases and auto-update
 
-The app can download updates from GitHub Releases if you set `UpdateGitHubRepo` (e.g., `"yourname/pinscreen-2"`) in your per-user config.
+The app pulls updates from this repo's GitHub Releases via the **Check for Updates…** button in the overlay. The release repo is hard-coded to `davidvanderburgh/pinscreen-2`.
+
+### Create a release via GitHub Actions (preferred)
+
+`.github/workflows/release.yml` triggers on any pushed `v*` tag and publishes win-x64 / osx-arm64 / linux-x64 zips to the matching release. The release must already exist when the workflow runs (it uploads with `gh release upload --clobber`), so use:
+
+```bash
+gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes "release notes here"
+```
+
+That single command creates the tag, the release, and triggers the multi-platform build.
 
 ### Create a release from local
 
