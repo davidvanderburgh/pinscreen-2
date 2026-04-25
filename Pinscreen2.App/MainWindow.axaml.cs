@@ -106,19 +106,22 @@ public partial class MainWindow : Window
             try { UpdateVersionInfo(); } catch { }
             try
             {
+                // Recompute clock position only on actual size changes, never on
+                // every LayoutUpdated. UpdateClock writes Canvas.Left/Top which
+                // invalidates the canvas arrange and would re-fire LayoutUpdated
+                // in an infinite loop.
                 var root = this.FindControl<Grid>("RootGrid");
                 if (root != null)
                 {
-                    root.LayoutUpdated += (_, __) => UpdateClock();
                     root.PropertyChanged += (_, ev) =>
                     {
-                        if (ev.Property == Visual.BoundsProperty) UpdateClock();
+                        if (ev.Property == Visual.BoundsProperty)
+                            Dispatcher.UIThread.Post(UpdateClock, DispatcherPriority.Background);
                     };
                 }
                 this.PropertyChanged += (_, ev) =>
                 {
                     if (ev.Property == Window.WindowStateProperty
-                        || ev.Property == Visual.BoundsProperty
                         || ev.Property == Window.ClientSizeProperty)
                     {
                         Dispatcher.UIThread.Post(UpdateClock, DispatcherPriority.Background);
@@ -1248,10 +1251,10 @@ public partial class MainWindow : Window
                 {
                     if (ClockText.Parent is Control parent)
                     {
-                        parent.LayoutUpdated += (_, __) => UpdateClock();
                         parent.PropertyChanged += (_, ev) =>
                         {
-                            if (ev.Property == Visual.BoundsProperty) UpdateClock();
+                            if (ev.Property == Visual.BoundsProperty)
+                                Dispatcher.UIThread.Post(UpdateClock, DispatcherPriority.Background);
                         };
                     }
                 };
@@ -1260,7 +1263,16 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    private bool _updatingClock;
     private void UpdateClock()
+    {
+        if (_updatingClock) return;
+        _updatingClock = true;
+        try { UpdateClockCore(); }
+        finally { _updatingClock = false; }
+    }
+
+    private void UpdateClockCore()
     {
         var now = DateTime.Now.ToString(_config.ClockFormat);
         try
