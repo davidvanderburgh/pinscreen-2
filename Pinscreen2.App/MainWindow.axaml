@@ -105,6 +105,13 @@
                                 <Slider Name="DelaySlider" Minimum="0" Maximum="10" Width="240" ValueChanged="OnDelayChanged"/>
                                 <TextBlock Name="DelayValueText" Foreground="#CCCCCC" VerticalAlignment="Center"/>
                             </StackPanel>
+                            <Separator/>
+                            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock Text="Remote library URL:" Foreground="#CCCCCC" VerticalAlignment="Center"/>
+                                <TextBox Name="RemoteUrlBox" Width="360" Watermark="http://server:8080"/>
+                                <Button Foreground="White" Click="OnApplyRemoteUrlClicked">Apply</Button>
+                                <Button Foreground="White" Click="OnClearRemoteUrlClicked">Clear</Button>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </Border>

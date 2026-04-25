@@ -38,6 +38,10 @@ public partial class MainWindow : Window
     private string _clockColorHex = "#FFFFFFFF";
     private int _delaySeconds = 3;
     private bool _libVlcInitFailed = false;
+    private RemoteLibraryClient? _remoteClient;
+    private readonly Dictionary<string, RemoteFile> _remoteFiles = new();
+    private const string RemotePrefix = "remote:";
+    private string _remoteStatus = string.Empty;
     private bool _isInitializingUi = true;
     private string _effectiveConfigPath = string.Empty;
     private const string GitHubUpdateRepo = "davidvanderburgh/pinscreen-2"; // permanently linked repo
@@ -228,6 +232,9 @@ public partial class MainWindow : Window
                 if (delayValueText != null)
                     delayValueText.Text = $"{_delaySeconds}s";
             }
+            var remoteUrlBox = this.FindControl<TextBox>("RemoteUrlBox");
+            if (remoteUrlBox != null)
+                remoteUrlBox.Text = _config.RemoteLibraryUrl ?? string.Empty;
         }
         catch { }
     }
@@ -312,6 +319,39 @@ public partial class MainWindow : Window
     private void OnRebuildQueueClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _ = BuildPlaylistAsync();
+    }
+
+    private async void OnApplyRemoteUrlClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            var box = this.FindControl<TextBox>("RemoteUrlBox");
+            var url = (box?.Text ?? string.Empty).Trim();
+            _config.RemoteLibraryUrl = url;
+            _remoteClient = null; // force recreate with new URL
+            _remoteFiles.Clear();
+            SaveConfig();
+            await BuildPlaylistAsync();
+            PlayNext();
+        }
+        catch (Exception ex) { Console.WriteLine($"Apply remote URL failed: {ex.Message}"); }
+    }
+
+    private async void OnClearRemoteUrlClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            var box = this.FindControl<TextBox>("RemoteUrlBox");
+            if (box != null) box.Text = string.Empty;
+            _config.RemoteLibraryUrl = string.Empty;
+            _remoteClient = null;
+            _remoteFiles.Clear();
+            _remoteStatus = string.Empty;
+            SaveConfig();
+            await BuildPlaylistAsync();
+            PlayNext();
+        }
+        catch (Exception ex) { Console.WriteLine($"Clear remote URL failed: {ex.Message}"); }
     }
 
     private void OnOpenConfigClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1273,29 +1313,56 @@ public partial class MainWindow : Window
 
     private async Task BuildPlaylistAsync()
     {
-        var folders = _config.MediaFolders.ToList();
         var collected = new List<string>();
         int totalFound = 0;
 
-        await Task.Run(() =>
+        if (!string.IsNullOrWhiteSpace(_config.RemoteLibraryUrl))
         {
-            foreach (var folder in folders)
+            try
             {
-                var resolved = ResolveFolderPath(folder);
-                if (string.IsNullOrWhiteSpace(resolved) || !Directory.Exists(resolved))
+                EnsureRemoteClient();
+                _remoteStatus = "Fetching manifest…";
+                UpdateStatus();
+                var files = await _remoteClient!.FetchManifestAsync();
+                _remoteFiles.Clear();
+                foreach (var f in files)
                 {
-                    Console.WriteLine($"Scan skip: folder not found -> '{folder}' (resolved='{resolved}')");
-                    continue;
-                }
-                Console.WriteLine($"Scanning: {resolved}");
-
-                foreach (var file in EnumerateVideoFilesSafe(resolved))
-                {
-                    collected.Add(file);
+                    _remoteFiles[f.Path] = f;
+                    collected.Add(RemotePrefix + f.Path);
                     totalFound++;
                 }
+                _remoteStatus = $"Remote manifest: {files.Count} files";
+                Console.WriteLine($"Remote manifest fetched: {files.Count} files");
             }
-        });
+            catch (Exception ex)
+            {
+                _remoteStatus = $"Remote fetch failed: {ex.Message}";
+                Console.WriteLine($"Remote manifest fetch failed: {ex}");
+            }
+        }
+        else
+        {
+            var folders = _config.MediaFolders.ToList();
+            await Task.Run(() =>
+            {
+                foreach (var folder in folders)
+                {
+                    var resolved = ResolveFolderPath(folder);
+                    if (string.IsNullOrWhiteSpace(resolved) || !Directory.Exists(resolved))
+                    {
+                        Console.WriteLine($"Scan skip: folder not found -> '{folder}' (resolved='{resolved}')");
+                        continue;
+                    }
+                    Console.WriteLine($"Scanning: {resolved}");
+
+                    foreach (var file in EnumerateVideoFilesSafe(resolved))
+                    {
+                        collected.Add(file);
+                        totalFound++;
+                    }
+                }
+            });
+        }
 
         // Randomize order each build
         var rng = new Random();
@@ -1304,7 +1371,7 @@ public partial class MainWindow : Window
         {
             // Group by immediate parent folder name
             var grouped = collected
-                .GroupBy(p => new DirectoryInfo(Path.GetDirectoryName(p) ?? string.Empty).Name)
+                .GroupBy(p => GetGroupKey(p))
                 // Shuffle items within each group
                 .Select(g => g.OrderBy(_ => rng.Next()).ToList())
                 .ToList();
@@ -1402,6 +1469,29 @@ public partial class MainWindow : Window
         return configuredPath;
     }
 
+    private static string GetGroupKey(string item)
+    {
+        if (item.StartsWith(RemotePrefix, StringComparison.Ordinal))
+        {
+            var rel = item.Substring(RemotePrefix.Length);
+            var idx = rel.LastIndexOf('/');
+            if (idx <= 0) return string.Empty;
+            var parent = rel.Substring(0, idx);
+            var sep = parent.LastIndexOf('/');
+            return sep < 0 ? parent : parent.Substring(sep + 1);
+        }
+        return new DirectoryInfo(Path.GetDirectoryName(item) ?? string.Empty).Name;
+    }
+
+    private void EnsureRemoteClient()
+    {
+        if (_remoteClient != null) return;
+        var cacheDir = string.IsNullOrWhiteSpace(_config.RemoteCacheDir)
+            ? RemoteLibraryClient.DefaultCacheDir()
+            : _config.RemoteCacheDir;
+        _remoteClient = new RemoteLibraryClient(_config.RemoteLibraryUrl, cacheDir);
+    }
+
     private static bool HasVideoExtension(string path)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
@@ -1426,27 +1516,71 @@ public partial class MainWindow : Window
         }
 
         _currentItem = _playlist.Dequeue();
-        // Apply delay if configured
-        if (_delaySeconds > 0)
+        var item = _currentItem;
+        var delay = TimeSpan.FromSeconds(_delaySeconds);
+
+        Dispatcher.UIThread.Post(async () =>
         {
-            var delay = TimeSpan.FromSeconds(_delaySeconds);
-            Dispatcher.UIThread.Post(async () =>
+            try { _mediaPlayer?.Stop(); } catch { }
+            string? localPath = null;
+            try
             {
-                // Stop to ensure the screen returns to black during the delay
-                try { _mediaPlayer?.Stop(); } catch { }
+                localPath = await ResolvePlayablePathAsync(item);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to resolve item '{item}': {ex.Message}");
+                _remoteStatus = $"Download failed: {ex.Message}";
+                UpdateStatus();
+                Dispatcher.UIThread.Post(PlayNext);
+                return;
+            }
+            if (string.IsNullOrEmpty(localPath))
+            {
+                Dispatcher.UIThread.Post(PlayNext);
+                return;
+            }
+            if (delay > TimeSpan.Zero)
+            {
                 try { await Task.Delay(delay); } catch { }
-                if (_mediaPlayer == null || _libVlc == null) return;
-                var mediaDelayed = new Media(_libVlc, _currentItem, FromType.FromPath);
-                _mediaPlayer.Play(mediaDelayed);
-            }, DispatcherPriority.Background);
-        }
-        else
-        {
-            var media = new Media(_libVlc, _currentItem, FromType.FromPath);
+            }
+            if (_mediaPlayer == null || _libVlc == null) return;
+            if (item != _currentItem) return; // user advanced past us
+            var media = new Media(_libVlc, localPath, FromType.FromPath);
             _mediaPlayer.Play(media);
-        }
+            PrefetchNext();
+        }, DispatcherPriority.Background);
 
         UpdateStatus();
+    }
+
+    private async Task<string?> ResolvePlayablePathAsync(string item)
+    {
+        if (!item.StartsWith(RemotePrefix, StringComparison.Ordinal)) return item;
+        if (_remoteClient == null) EnsureRemoteClient();
+        var rel = item.Substring(RemotePrefix.Length);
+        if (!_remoteFiles.TryGetValue(rel, out var rf)) rf = new RemoteFile(rel, 0);
+        if (_remoteClient!.IsCached(rel, rf.Size)) return _remoteClient.GetCachePath(rel);
+        _remoteStatus = $"Downloading {Path.GetFileName(rel)}…";
+        UpdateStatus();
+        var local = await _remoteClient.EnsureCachedAsync(rf);
+        _remoteStatus = $"Cached {Path.GetFileName(rel)}";
+        return local;
+    }
+
+    private void PrefetchNext()
+    {
+        if (_remoteClient == null) return;
+        var next = _playlist.FirstOrDefault();
+        if (next == null || !next.StartsWith(RemotePrefix, StringComparison.Ordinal)) return;
+        var rel = next.Substring(RemotePrefix.Length);
+        if (!_remoteFiles.TryGetValue(rel, out var rf)) rf = new RemoteFile(rel, 0);
+        if (_remoteClient.IsCached(rel, rf.Size)) return;
+        _ = Task.Run(async () =>
+        {
+            try { await _remoteClient.EnsureCachedAsync(rf); }
+            catch (Exception ex) { Console.WriteLine($"Prefetch failed for {rel}: {ex.Message}"); }
+        });
     }
 
     // No VLC marquee positioning; Avalonia clock overlay only
@@ -1457,10 +1591,16 @@ public partial class MainWindow : Window
         {
             var status = this.FindControl<TextBlock>("StatusText");
             if (status == null) return;
-            var firstFolder = _config.MediaFolders.FirstOrDefault() ?? "(none)";
+            var source = string.IsNullOrWhiteSpace(_config.RemoteLibraryUrl)
+                ? (_config.MediaFolders.FirstOrDefault() ?? "(none)")
+                : $"remote:{_config.RemoteLibraryUrl}";
             var vlcStatus = _libVlcInitFailed ? "VLC: missing" : (_libVlc == null ? "VLC: not ready" : "VLC: ok");
             var cfgSrc = (!string.IsNullOrWhiteSpace(_effectiveConfigPath) && _effectiveConfigPath.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase)) ? "cfg:app" : "cfg:user";
-            status.Text = $"Folder: {firstFolder}   Queue: {_playlist.Count}   Now: {Path.GetFileName(_currentItem)}   {vlcStatus}   {cfgSrc}";
+            var nowName = _currentItem.StartsWith(RemotePrefix, StringComparison.Ordinal)
+                ? Path.GetFileName(_currentItem.Substring(RemotePrefix.Length))
+                : Path.GetFileName(_currentItem);
+            var remote = string.IsNullOrEmpty(_remoteStatus) ? string.Empty : $"   {_remoteStatus}";
+            status.Text = $"Source: {source}   Queue: {_playlist.Count}   Now: {nowName}   {vlcStatus}   {cfgSrc}{remote}";
         }
         catch { }
     }
@@ -1503,5 +1643,7 @@ public class AppConfig
     public string ClockColor { get; set; } = "#FFFFFFFF";
     public int DelaySeconds { get; set; } = 3;
     public double ClockFontSize { get; set; } = 72.0;
+    public string RemoteLibraryUrl { get; set; } = string.Empty;
+    public string RemoteCacheDir { get; set; } = string.Empty;
     // UpdateGitHubRepo no longer needed; updater is permanently linked to the repo in code
 }

@@ -56,3 +56,31 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload ${{ github.ref_name }} Pinscreen2-${{ matrix.runtime }}.zip --clobber
+
+  server:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish server
+        run: >
+          dotnet publish Pinscreen2.Server/Pinscreen2.Server.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish/server
+
+      - name: Zip server
+        shell: pwsh
+        run: Compress-Archive -Path publish/server/* -DestinationPath Pinscreen2-Server-win-x64.zip
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} Pinscreen2-Server-win-x64.zip --clobber
