@@ -105,32 +105,12 @@ public partial class MainWindow : Window
         {
             try { UpdateClock(); } catch { }
             try { UpdateVersionInfo(); } catch { }
-            try
-            {
-                // Recompute clock position only on actual size changes, never on
-                // every LayoutUpdated. UpdateClock writes Canvas.Left/Top which
-                // invalidates the canvas arrange and would re-fire LayoutUpdated
-                // in an infinite loop.
-                var root = this.FindControl<Grid>("RootGrid");
-                if (root != null)
-                {
-                    root.PropertyChanged += (_, ev) =>
-                    {
-                        if (ev.Property == Visual.BoundsProperty)
-                            QueueUpdateClock();
-                    };
-                }
-                this.PropertyChanged += (_, ev) =>
-                {
-                    if (ev.Property == Window.WindowStateProperty
-                        || ev.Property == Window.ClientSizeProperty)
-                    {
-                        QueueUpdateClock();
-                    }
-                };
-            }
-            catch { }
         };
+        // Clock position is re-evaluated on the 1-second timer instead of from
+        // Bounds/WindowState/ClientSize events. Those event sources fire in
+        // bursts during monitor sleep/wake and were the root cause of past
+        // hang and crash reports -- the timer-driven path is deterministic
+        // and idempotent.
         await BuildPlaylistAsync();
 
         // Initialize LibVLC with software decode; let VideoView callbacks choose vout
@@ -1145,52 +1125,9 @@ public partial class MainWindow : Window
         _clockTimer.Tick += (_, __) => UpdateClock();
         _clockTimer.Start();
         UpdateClock();
-        try
-        {
-            if (ClockText != null)
-            {
-                ClockText.AttachedToVisualTree += (_, __) =>
-                {
-                    // ClockPopup is opened/closed by some flows (folder pickers),
-                    // which re-fires AttachedToVisualTree. Subscribe to the new
-                    // parent only once -- unhook from any prior parent first so
-                    // handlers don't accumulate and amplify a single bounds
-                    // change into many UpdateClock posts.
-                    if (ClockText.Parent is Control parent && !ReferenceEquals(parent, _clockParentSubscribed))
-                    {
-                        if (_clockParentSubscribed != null)
-                            _clockParentSubscribed.PropertyChanged -= OnClockParentPropertyChanged;
-                        parent.PropertyChanged += OnClockParentPropertyChanged;
-                        _clockParentSubscribed = parent;
-                    }
-                };
-            }
-        }
-        catch { }
-    }
-
-    private Control? _clockParentSubscribed;
-    private void OnClockParentPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs ev)
-    {
-        if (ev.Property == Visual.BoundsProperty)
-            QueueUpdateClock();
     }
 
     private bool _updatingClock;
-    private bool _clockUpdateQueued;
-    private void QueueUpdateClock()
-    {
-        // Coalesce bursts of bounds/state events (monitor wake, popup
-        // transitions, fullscreen toggles) into a single UpdateClock call.
-        if (_clockUpdateQueued) return;
-        _clockUpdateQueued = true;
-        Dispatcher.UIThread.Post(() =>
-        {
-            _clockUpdateQueued = false;
-            UpdateClock();
-        }, DispatcherPriority.Background);
-    }
-
     private void UpdateClock()
     {
         if (_updatingClock) return;
