@@ -111,7 +111,12 @@ public partial class MainWindow : Window
         // bursts during monitor sleep/wake and were the root cause of past
         // hang and crash reports -- the timer-driven path is deterministic
         // and idempotent.
-        await BuildPlaylistAsync();
+
+        // Kick off the playlist scan in the background. With ~30k files on a
+        // slow disk this takes several seconds; we don't want to block window
+        // show, LibVLC init, or VideoView attach. PlayNext() handles an empty
+        // playlist by retrying after BuildPlaylistAsync completes.
+        _ = BuildPlaylistAsync();
 
         // Initialize LibVLC with software decode; let VideoView callbacks choose vout
         try

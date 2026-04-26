@@ -56,7 +56,7 @@ if (-not $SkipPublish) {
     & dotnet publish (Join-Path $ProjectDir "Pinscreen2.App\Pinscreen2.App.csproj") `
         -c Release -r win-x64 --self-contained true `
         -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-        -p:PublishTrimmed=false `
+        -p:PublishTrimmed=false -p:PublishReadyToRun=true `
         -p:Version=$Version -p:AssemblyVersion=$Version -p:FileVersion=$Version -p:InformationalVersion=$Version
     if ($LASTEXITCODE -ne 0) { Write-Error "App publish failed."; exit 1 }
 }
