@@ -38,23 +38,12 @@ Remove-Item -Recurse -Force $publishDir -ErrorAction Ignore | Out-Null
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 
 # Build app publish
+$ver = $VersionTag.TrimStart('v','V')
 dotnet publish .\Pinscreen2.App\Pinscreen2.App.csproj -c Release -r $Runtime --self-contained true `
   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false `
+  -p:Version=$ver -p:AssemblyVersion=$ver -p:FileVersion=$ver -p:InformationalVersion=$ver `
   -o $publishDir
 Assert-Success "dotnet publish failed"
-
-# Build updater
-dotnet build .\Pinscreen2.Updater\Pinscreen2.Updater.csproj -c Release
-Assert-Success "dotnet build updater failed"
-
-# Copy updater next to app
-$updaterName = if ($Runtime -like 'win-*') { 'Pinscreen2.Updater.exe' } else { 'Pinscreen2.Updater' }
-$updaterSrc = Join-Path -Path ".\Pinscreen2.Updater\bin\Release\net9.0" -ChildPath $updaterName
-if (-not (Test-Path $updaterSrc)) {
-    Write-Error "Updater binary not found at $updaterSrc"
-    exit 1
-}
-Copy-Item $updaterSrc -Destination (Join-Path $publishDir $updaterName) -Force
 
 # Zip
 $zipName = "Pinscreen2-$Runtime.zip"

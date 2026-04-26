@@ -116,7 +116,7 @@ public partial class MainWindow : Window
                     root.PropertyChanged += (_, ev) =>
                     {
                         if (ev.Property == Visual.BoundsProperty)
-                            Dispatcher.UIThread.Post(UpdateClock, DispatcherPriority.Background);
+                            QueueUpdateClock();
                     };
                 }
                 this.PropertyChanged += (_, ev) =>
@@ -124,7 +124,7 @@ public partial class MainWindow : Window
                     if (ev.Property == Window.WindowStateProperty
                         || ev.Property == Window.ClientSizeProperty)
                     {
-                        Dispatcher.UIThread.Post(UpdateClock, DispatcherPriority.Background);
+                        QueueUpdateClock();
                     }
                 };
             }
@@ -259,21 +259,6 @@ public partial class MainWindow : Window
             var remoteUrlBox = this.FindControl<TextBox>("RemoteUrlBox");
             if (remoteUrlBox != null)
                 remoteUrlBox.Text = _config.RemoteLibraryUrl ?? string.Empty;
-            UpdateSyncFolderText();
-        }
-        catch { }
-    }
-
-    private void UpdateSyncFolderText()
-    {
-        try
-        {
-            var lbl = this.FindControl<TextBlock>("SyncFolderText");
-            if (lbl == null) return;
-            var dir = string.IsNullOrWhiteSpace(_config.RemoteCacheDir)
-                ? RemoteLibraryClient.DefaultCacheDir()
-                : _config.RemoteCacheDir;
-            lbl.Text = dir;
         }
         catch { }
     }
@@ -391,62 +376,6 @@ public partial class MainWindow : Window
         catch (Exception ex) { Console.WriteLine($"Clear remote URL failed: {ex.Message}"); }
     }
 
-    private async void OnSetSyncFolderClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        try
-        {
-            bool wasTopmost = false;
-            bool wasOverlayOpen = false;
-            bool wasClockOpen = false;
-            try
-            {
-                _suppressOverlayOpen = true;
-                wasTopmost = this.Topmost;
-                wasOverlayOpen = OverlayPopup?.IsOpen == true;
-                wasClockOpen = ClockPopup?.IsOpen == true;
-                if (OverlayPopup != null && OverlayPopup.IsOpen) OverlayPopup.IsOpen = false;
-                if (ClockPopup != null && ClockPopup.IsOpen) ClockPopup.IsOpen = false;
-                this.Topmost = false;
-                this.Activate();
-                await Task.Delay(50);
-            }
-            catch { }
-
-            string? selectedPath = null;
-            try
-            {
-                var result = await this.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
-                {
-                    AllowMultiple = false,
-                    Title = "Select Sync Folder"
-                });
-                var folder = result?.FirstOrDefault();
-                selectedPath = folder?.TryGetLocalPath();
-            }
-            catch { }
-
-            if (!string.IsNullOrWhiteSpace(selectedPath))
-            {
-                _config.RemoteCacheDir = selectedPath!;
-                _remoteClient = null;
-                SaveConfig();
-                UpdateSyncFolderText();
-                await BuildPlaylistAsync();
-                UpdateStatus();
-            }
-
-            try
-            {
-                this.Topmost = wasTopmost;
-                if (ClockPopup != null) ClockPopup.IsOpen = wasClockOpen;
-                try { UpdateClock(); } catch { }
-            }
-            catch { }
-            finally { _suppressOverlayOpen = false; }
-        }
-        catch { }
-    }
-
     private async void OnSyncNowClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (_isSyncing) return;
@@ -550,7 +479,7 @@ public partial class MainWindow : Window
             if (!File.Exists(path)) SaveConfig();
             if (File.Exists(path))
             {
-                OpenWithOS(path);
+                OpenExternalAndYieldFocus(path);
             }
         }
         catch { }
@@ -565,11 +494,25 @@ public partial class MainWindow : Window
                 var folder = Path.GetDirectoryName(_currentItem);
                 if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
                 {
-                    OpenWithOS(folder);
+                    OpenExternalAndYieldFocus(folder);
                 }
             }
         }
         catch { }
+    }
+
+    private void OpenExternalAndYieldFocus(string path)
+    {
+        // The Pinscreen window is fullscreen + topmost (and the clock is in a
+        // topmost popup), so OS-launched apps like Notepad/Explorer open behind
+        // it. Drop topmost, exit fullscreen, hide the overlay+clock popups, and
+        // minimize so the new window can take focus.
+        try { ToggleOverlay(false); } catch { }
+        try { if (ClockPopup != null) ClockPopup.IsOpen = false; } catch { }
+        try { this.Topmost = false; } catch { }
+        try { if (WindowState == WindowState.FullScreen) WindowState = WindowState.Normal; } catch { }
+        try { WindowState = WindowState.Minimized; } catch { }
+        OpenWithOS(path);
     }
 
     private async void OnSetMediaFolderClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -610,6 +553,7 @@ public partial class MainWindow : Window
             if (!string.IsNullOrWhiteSpace(selectedPath))
             {
                 _config.MediaFolders = new List<string> { selectedPath! };
+                _remoteClient = null; // sync target follows the media folder
                 SaveConfig();
                 await BuildPlaylistAsync();
                 ToggleOverlay(false);
@@ -661,202 +605,101 @@ public partial class MainWindow : Window
         Close();
     }
 
-    private async void OnInstallUpdateZipClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        try
-        {
-            // Pick a zip file
-            var files = await this.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-            {
-                AllowMultiple = false,
-                Title = "Select Update Zip",
-                FileTypeFilter = new[] { new FilePickerFileType("Zip") { Patterns = new[] { "*.zip" }.ToList() } }
-            });
-            var file = files?.FirstOrDefault();
-            var zipPath = file?.TryGetLocalPath();
-            if (string.IsNullOrWhiteSpace(zipPath)) return;
-
-            var appDir = AppContext.BaseDirectory;
-            var exeName = OperatingSystem.IsWindows() ? "Pinscreen2.App.exe" : (OperatingSystem.IsMacOS() ? "Pinscreen2.App" : "Pinscreen2.App");
-            var updaterPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Pinscreen2.Updater", "bin", "Debug", "net9.0", OperatingSystem.IsWindows() ? "Pinscreen2.Updater.exe" : "Pinscreen2.Updater");
-            // If not found in dev path, try alongside app (for published scenarios)
-            if (!File.Exists(updaterPath))
-            {
-                updaterPath = Path.Combine(appDir, OperatingSystem.IsWindows() ? "Pinscreen2.Updater.exe" : "Pinscreen2.Updater");
-            }
-            if (!File.Exists(updaterPath))
-            {
-                await ShowMessageAsync("Updater not found. Ensure Pinscreen2.Updater is deployed next to the app or run from dev output.");
-                return;
-            }
-
-            // Launch updater and quit
-            try
-            {
-                var psi = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = updaterPath,
-                    UseShellExecute = true,
-                    WorkingDirectory = appDir,
-                    ArgumentList = { appDir, zipPath!, exeName }
-                };
-                try { psi.ArgumentList.Add(System.Diagnostics.Process.GetCurrentProcess().Id.ToString()); } catch { }
-                System.Diagnostics.Process.Start(psi);
-            }
-            catch (Exception ex)
-            {
-                await ShowMessageAsync($"Failed to launch updater: {ex.Message}");
-                return;
-            }
-            Close();
-        }
-        catch { }
-    }
-
     private async void OnCheckUpdatesClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        // Lightweight version check: ask GitHub for the latest release, compare
+        // to the running version, and display the result. No download, no
+        // self-update -- the user installs the new version themselves from the
+        // releases page (matches the jjp-asset-decryptor pattern).
+        string current = GetLocalVersion()?.ToString() ?? "unknown";
+        string releasesUrl = $"https://github.com/{GitHubUpdateRepo}/releases";
         try
         {
-            var apiLatest = $"https://api.github.com/repos/{GitHubUpdateRepo}/releases/latest";
-            var apiList = $"https://api.github.com/repos/{GitHubUpdateRepo}/releases";
-            using var http = new HttpClient();
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("Pinscreen2-Updater");
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("Pinscreen2-UpdateCheck");
             http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
-            http.Timeout = TimeSpan.FromSeconds(20);
-            // Allow private repo via token
-            var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN") ?? Environment.GetEnvironmentVariable("GH_TOKEN");
-            if (!string.IsNullOrWhiteSpace(token))
-            {
-                http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-            }
 
-            JsonElement releaseEl = default;
-            try
+            using var resp = await http.GetAsync($"https://api.github.com/repos/{GitHubUpdateRepo}/releases/latest");
+            if (!resp.IsSuccessStatusCode)
             {
-                using var resp = await http.GetAsync(apiLatest);
-                if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
-                {
-                    // No latest release (or private repo without token). Try list and pick first non-draft
-                    using var respList = await http.GetAsync(apiList);
-                    if (!respList.IsSuccessStatusCode)
-                    {
-                        await ShowMessageAsync($"Update check failed: {(int)respList.StatusCode} {respList.ReasonPhrase}. Ensure a published release exists and API access.");
-                        return;
-                    }
-                    var arr = JsonDocument.Parse(await respList.Content.ReadAsByteArrayAsync()).RootElement;
-                    if (arr.ValueKind != JsonValueKind.Array || arr.GetArrayLength() == 0)
-                    {
-                        await ShowMessageAsync("No releases found. Publish a release on GitHub.");
-                        return;
-                    }
-                    // Prefer first non-draft; include prereleases
-                    var pick = arr.EnumerateArray().FirstOrDefault(e => e.TryGetProperty("draft", out var d) && d.ValueKind == JsonValueKind.False);
-                    if (pick.ValueKind == JsonValueKind.Undefined)
-                        pick = arr.EnumerateArray().First();
-                    releaseEl = pick;
-                }
-                else if (resp.IsSuccessStatusCode)
-                {
-                    releaseEl = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync()).RootElement;
-                }
-                else
-                {
-                    await ShowMessageAsync($"Update check failed: {(int)resp.StatusCode} {resp.ReasonPhrase}. If the repo is private, set GITHUB_TOKEN.");
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                await ShowMessageAsync($"Update check failed: {ex.Message}");
+                await ShowMessageAsync(
+                    $"Update check failed: {(int)resp.StatusCode} {resp.ReasonPhrase}\n\n" +
+                    $"Current version: {current}\n" +
+                    $"Releases: {releasesUrl}");
                 return;
             }
+            var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync()).RootElement;
+            var tag = doc.TryGetProperty("tag_name", out var t) ? (t.GetString() ?? "") : "";
+            var name = doc.TryGetProperty("name", out var n) ? (n.GetString() ?? "") : "";
+            var htmlUrl = doc.TryGetProperty("html_url", out var u) ? (u.GetString() ?? releasesUrl) : releasesUrl;
+            var publishedAt = doc.TryGetProperty("published_at", out var p) ? (p.GetString() ?? "") : "";
 
-            var tag = releaseEl.TryGetProperty("tag_name", out var tagProp) ? tagProp.GetString() ?? string.Empty : string.Empty;
-            var assets = releaseEl.TryGetProperty("assets", out var assetsProp) ? assetsProp : default;
+            var latest = ParseVersion(tag);
+            var local = GetLocalVersion();
+            string verdict;
+            if (latest != null && local != null && latest > local)
+                verdict = $"Update available: {tag}";
+            else if (latest != null && local != null && latest <= local)
+                verdict = "You're up to date.";
+            else
+                verdict = $"Latest release: {tag}";
 
-            var localVersion = GetLocalVersion();
-            var remoteVersion = ParseVersion(tag);
-            if (remoteVersion != null && localVersion != null && remoteVersion <= localVersion)
-            {
-                await ShowMessageAsync($"You're up to date. Current: {localVersion} Latest: {remoteVersion}");
-                return;
-            }
-
-            // Find asset matching current platform
-            string? downloadUrl = null;
-            string? assetName = null;
-            if (assets.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var a in assets.EnumerateArray())
-                {
-                    var name = a.TryGetProperty("name", out var n) ? n.GetString() ?? string.Empty : string.Empty;
-                    var url = a.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? string.Empty : string.Empty;
-                    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(url)) continue;
-                    if (IsAssetMatchForCurrentRuntime(name))
-                    {
-                        downloadUrl = url;
-                        assetName = name;
-                        break;
-                    }
-                }
-            }
-
-            if (string.IsNullOrWhiteSpace(downloadUrl))
-            {
-                await ShowMessageAsync("No suitable release asset found for this OS/architecture.");
-                return;
-            }
-
-            // Download to temp
-            string tmpFile;
-            try
-            {
-                tmpFile = Path.Combine(Path.GetTempPath(), assetName ?? ("pinscreen2-update-" + Guid.NewGuid().ToString("N") + ".zip"));
-                var data = await http.GetByteArrayAsync(downloadUrl);
-                await File.WriteAllBytesAsync(tmpFile, data);
-            }
-            catch (Exception ex)
-            {
-                await ShowMessageAsync($"Download failed: {ex.Message}");
-                return;
-            }
-
-            // Launch updater
-            var appDir = AppContext.BaseDirectory;
-            var exeName = OperatingSystem.IsWindows() ? "Pinscreen2.App.exe" : (OperatingSystem.IsMacOS() ? "Pinscreen2.App" : "Pinscreen2.App");
-            var updaterPath = Path.Combine(appDir, OperatingSystem.IsWindows() ? "Pinscreen2.Updater.exe" : "Pinscreen2.Updater");
-            if (!File.Exists(updaterPath))
-            {
-                // Try dev output (running from IDE)
-                var dev = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Pinscreen2.Updater", "bin", "Debug", "net9.0", OperatingSystem.IsWindows() ? "Pinscreen2.Updater.exe" : "Pinscreen2.Updater"));
-                if (File.Exists(dev)) updaterPath = dev;
-            }
-            if (!File.Exists(updaterPath))
-            {
-                await ShowMessageAsync("Updater not found beside app. Ensure Pinscreen2.Updater is deployed.");
-                return;
-            }
-            try
-            {
-                var psi = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = updaterPath,
-                    UseShellExecute = true,
-                    WorkingDirectory = appDir,
-                };
-                psi.ArgumentList.Add(appDir);
-                psi.ArgumentList.Add(tmpFile);
-                psi.ArgumentList.Add(exeName);
-                try { psi.ArgumentList.Add(System.Diagnostics.Process.GetCurrentProcess().Id.ToString()); } catch { }
-                System.Diagnostics.Process.Start(psi);
-                Close();
-            }
-            catch (Exception ex)
-            {
-                await ShowMessageAsync($"Failed to launch updater: {ex.Message}");
-            }
+            var msg = verdict + "\n\n" +
+                      $"Current version: {current}\n" +
+                      $"Latest version:  {(string.IsNullOrWhiteSpace(tag) ? "(unknown)" : tag)}" +
+                      (string.IsNullOrWhiteSpace(name) || name == tag ? "" : $"  ({name})") + "\n" +
+                      (string.IsNullOrWhiteSpace(publishedAt) ? "" : $"Published:       {publishedAt}\n");
+            await ShowMessageAsync(msg, htmlUrl);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            await ShowMessageAsync(
+                $"Update check failed: {ex.Message}\n\n" +
+                $"Current version: {current}",
+                releasesUrl);
+        }
+    }
+
+    private async void OnPreviewQueueClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        const int Cap = 25;
+        try
+        {
+            var snapshot = _playlist.Take(Cap).ToList();
+            string nowName = string.IsNullOrWhiteSpace(_currentItem) ? "(none)" : DisplayNameForItem(_currentItem);
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"Now playing: {nowName}");
+            sb.AppendLine();
+            if (snapshot.Count == 0)
+            {
+                sb.AppendLine("Queue is empty.");
+            }
+            else
+            {
+                sb.AppendLine($"Up next ({snapshot.Count}{(_playlist.Count > Cap ? $" of {_playlist.Count}" : "")}):");
+                for (int i = 0; i < snapshot.Count; i++)
+                    sb.AppendLine($"  {i + 1,2}. {DisplayNameForItem(snapshot[i])}");
+                if (_playlist.Count > Cap)
+                    sb.AppendLine($"  … +{_playlist.Count - Cap} more");
+            }
+            await ShowMessageAsync(sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            await ShowMessageAsync($"Could not build queue preview: {ex.Message}");
+        }
+    }
+
+    private static string DisplayNameForItem(string item)
+    {
+        if (string.IsNullOrWhiteSpace(item)) return "(none)";
+        try
+        {
+            var file = Path.GetFileName(item);
+            var game = new DirectoryInfo(Path.GetDirectoryName(item) ?? string.Empty).Name;
+            return string.IsNullOrEmpty(game) ? file : $"{game} / {file}";
+        }
+        catch { return item; }
     }
 
     private static Version? GetLocalVersion()
@@ -865,8 +708,26 @@ public partial class MainWindow : Window
         {
             var asm = Assembly.GetExecutingAssembly();
             var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-            if (!string.IsNullOrWhiteSpace(info)) return ParseVersion(info);
-            return asm.GetName().Version;
+            var parsed = ParseVersion(info);
+            if (parsed != null && parsed != new Version(1, 0, 0, 0)) return parsed;
+            var asmVer = asm.GetName().Version;
+            if (asmVer != null && asmVer != new Version(1, 0, 0, 0)) return asmVer;
+
+            // Fall back to the EXE's FileVersionInfo (stamped by the installer
+            // and by Version.props if available). This catches builds where the
+            // managed assembly was not stamped via -p:Version.
+            try
+            {
+                var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                if (!string.IsNullOrWhiteSpace(exe) && File.Exists(exe))
+                {
+                    var fvi = System.Diagnostics.FileVersionInfo.GetVersionInfo(exe);
+                    var fileVer = ParseVersion(fvi.ProductVersion) ?? ParseVersion(fvi.FileVersion);
+                    if (fileVer != null && fileVer != new Version(1, 0, 0, 0)) return fileVer;
+                }
+            }
+            catch { }
+            return parsed ?? asmVer;
         }
         catch { return null; }
     }
@@ -879,34 +740,9 @@ public partial class MainWindow : Window
         return Version.TryParse(s, out ver) ? ver : null;
     }
 
-    private static bool IsAssetMatchForCurrentRuntime(string assetName)
-    {
-        // Asset must be the App zip for this runtime, NOT the Server zip or
-        // any other auxiliary artifact. Match exactly: "pinscreen2-<rid>.zip".
-        var name = assetName.ToLowerInvariant();
-        string[] rids;
-        if (OperatingSystem.IsWindows())
-        {
-            rids = new[] { "win-x64" };
-        }
-        else if (OperatingSystem.IsMacOS())
-        {
-            rids = RuntimeInformation.OSArchitecture == Architecture.Arm64
-                ? new[] { "osx-arm64" }
-                : new[] { "osx-x64" };
-        }
-        else
-        {
-            rids = new[] { "linux-x64" };
-        }
-        foreach (var rid in rids)
-        {
-            if (name == $"pinscreen2-{rid}.zip") return true;
-        }
-        return false;
-    }
+    private Task ShowMessageAsync(string text) => ShowMessageAsync(text, null);
 
-    private async Task ShowMessageAsync(string text)
+    private async Task ShowMessageAsync(string text, string? linkUrl)
     {
         try
         {
@@ -915,31 +751,79 @@ public partial class MainWindow : Window
             _suppressOverlayOpen = true;
             try { if (OverlayPopup != null) OverlayPopup.IsOpen = false; } catch { }
 
+            var body = new TextBlock
+            {
+                Text = text,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.White,
+                FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+            };
+            var buttonBar = new StackPanel
+            {
+                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                Spacing = 8,
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            if (!string.IsNullOrWhiteSpace(linkUrl))
+            {
+                var openBtn = new Button
+                {
+                    Content = "Open in browser",
+                    Foreground = Brushes.White,
+                };
+                openBtn.Click += (_, __) =>
+                {
+                    try
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = linkUrl!,
+                            UseShellExecute = true,
+                        });
+                    }
+                    catch { }
+                };
+                buttonBar.Children.Add(openBtn);
+            }
+            var okBtn = new Button
+            {
+                Content = "OK",
+                Foreground = Brushes.White,
+            };
+            buttonBar.Children.Add(okBtn);
             var dlg = new Window
             {
-                Width = 520,
-                Height = 180,
+                Width = 640,
                 Title = "Pinscreen 2",
-                CanResize = false,
+                CanResize = true,
                 Topmost = true,
                 ShowInTaskbar = false,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                SizeToContent = SizeToContent.WidthAndHeight,
+                SizeToContent = SizeToContent.Height,
+                MinHeight = 160,
+                MaxHeight = 600,
                 Background = Brushes.Black,
-                Content = new StackPanel
+                Content = new DockPanel
                 {
                     Margin = new Thickness(16),
                     Children =
                     {
-                        new TextBlock{ Text = text, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.White, MaxWidth = 460 },
-                        new Button{ Content = "OK", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right, Margin = new Thickness(0,12,0,0) }
-                    }
-                }
+                        new DockPanel
+                        {
+                            [DockPanel.DockProperty] = Dock.Bottom,
+                            Children = { buttonBar },
+                        },
+                        new ScrollViewer
+                        {
+                            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+                            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                            Content = body,
+                        },
+                    },
+                },
             };
-            if (dlg.Content is StackPanel sp && sp.Children.OfType<Button>().FirstOrDefault() is Button ok)
-            {
-                ok.Click += (_, __) => dlg.Close();
-            }
+            okBtn.Click += (_, __) => dlg.Close();
             await dlg.ShowDialog(this);
 
             _suppressOverlayOpen = prevSuppress;
@@ -1249,13 +1133,17 @@ public partial class MainWindow : Window
             {
                 ClockText.AttachedToVisualTree += (_, __) =>
                 {
-                    if (ClockText.Parent is Control parent)
+                    // ClockPopup is opened/closed by some flows (folder pickers),
+                    // which re-fires AttachedToVisualTree. Subscribe to the new
+                    // parent only once -- unhook from any prior parent first so
+                    // handlers don't accumulate and amplify a single bounds
+                    // change into many UpdateClock posts.
+                    if (ClockText.Parent is Control parent && !ReferenceEquals(parent, _clockParentSubscribed))
                     {
-                        parent.PropertyChanged += (_, ev) =>
-                        {
-                            if (ev.Property == Visual.BoundsProperty)
-                                Dispatcher.UIThread.Post(UpdateClock, DispatcherPriority.Background);
-                        };
+                        if (_clockParentSubscribed != null)
+                            _clockParentSubscribed.PropertyChanged -= OnClockParentPropertyChanged;
+                        parent.PropertyChanged += OnClockParentPropertyChanged;
+                        _clockParentSubscribed = parent;
                     }
                 };
             }
@@ -1263,7 +1151,28 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    private Control? _clockParentSubscribed;
+    private void OnClockParentPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs ev)
+    {
+        if (ev.Property == Visual.BoundsProperty)
+            QueueUpdateClock();
+    }
+
     private bool _updatingClock;
+    private bool _clockUpdateQueued;
+    private void QueueUpdateClock()
+    {
+        // Coalesce bursts of bounds/state events (monitor wake, popup
+        // transitions, fullscreen toggles) into a single UpdateClock call.
+        if (_clockUpdateQueued) return;
+        _clockUpdateQueued = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _clockUpdateQueued = false;
+            UpdateClock();
+        }, DispatcherPriority.Background);
+    }
+
     private void UpdateClock()
     {
         if (_updatingClock) return;
@@ -1547,48 +1456,29 @@ public partial class MainWindow : Window
         var collected = new List<string>();
         int totalFound = 0;
 
-        if (!string.IsNullOrWhiteSpace(_config.RemoteLibraryUrl))
+        // Single source of truth: the configured media folders. When a remote
+        // library URL is set, Sync downloads INTO the first media folder, and
+        // a regular scan picks the files up just like local content.
+        var folders = _config.MediaFolders.ToList();
+        await Task.Run(() =>
         {
-            EnsureRemoteClient();
-            var cacheDir = _remoteClient!.CacheDir;
-            await Task.Run(() =>
+            foreach (var folder in folders)
             {
-                if (Directory.Exists(cacheDir))
+                var resolved = ResolveFolderPath(folder);
+                if (string.IsNullOrWhiteSpace(resolved) || !Directory.Exists(resolved))
                 {
-                    foreach (var file in EnumerateVideoFilesSafe(cacheDir))
-                    {
-                        collected.Add(file);
-                        totalFound++;
-                    }
+                    Console.WriteLine($"Scan skip: folder not found -> '{folder}' (resolved='{resolved}')");
+                    continue;
                 }
-            });
-            _remoteStatus = collected.Count == 0
-                ? "Local synced library is empty. Press Sync to download."
-                : $"Local synced library: {collected.Count} files";
-        }
-        else
-        {
-            var folders = _config.MediaFolders.ToList();
-            await Task.Run(() =>
-            {
-                foreach (var folder in folders)
-                {
-                    var resolved = ResolveFolderPath(folder);
-                    if (string.IsNullOrWhiteSpace(resolved) || !Directory.Exists(resolved))
-                    {
-                        Console.WriteLine($"Scan skip: folder not found -> '{folder}' (resolved='{resolved}')");
-                        continue;
-                    }
-                    Console.WriteLine($"Scanning: {resolved}");
+                Console.WriteLine($"Scanning: {resolved}");
 
-                    foreach (var file in EnumerateVideoFilesSafe(resolved))
-                    {
-                        collected.Add(file);
-                        totalFound++;
-                    }
+                foreach (var file in EnumerateVideoFilesSafe(resolved))
+                {
+                    collected.Add(file);
+                    totalFound++;
                 }
-            });
-        }
+            }
+        });
 
         // Randomize order each build
         var rng = new Random();
@@ -1746,10 +1636,15 @@ public partial class MainWindow : Window
     private void EnsureRemoteClient()
     {
         if (_remoteClient != null) return;
-        var cacheDir = string.IsNullOrWhiteSpace(_config.RemoteCacheDir)
+        // Sync writes directly into the (first) media folder; there is no
+        // separate sync cache. The folder is the single source of truth.
+        var first = _config.MediaFolders.FirstOrDefault();
+        var resolved = string.IsNullOrWhiteSpace(first)
             ? RemoteLibraryClient.DefaultCacheDir()
-            : _config.RemoteCacheDir;
-        _remoteClient = new RemoteLibraryClient(_config.RemoteLibraryUrl, cacheDir);
+            : ResolveFolderPath(first!);
+        if (string.IsNullOrWhiteSpace(resolved))
+            resolved = RemoteLibraryClient.DefaultCacheDir();
+        _remoteClient = new RemoteLibraryClient(_config.RemoteLibraryUrl, resolved);
     }
 
     private static bool HasVideoExtension(string path)
@@ -1854,6 +1749,4 @@ public class AppConfig
     public int DelaySeconds { get; set; } = 3;
     public double ClockFontSize { get; set; } = 72.0;
     public string RemoteLibraryUrl { get; set; } = string.Empty;
-    public string RemoteCacheDir { get; set; } = string.Empty;
-    // UpdateGitHubRepo no longer needed; updater is permanently linked to the repo in code
 }

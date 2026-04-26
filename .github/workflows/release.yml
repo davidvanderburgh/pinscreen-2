@@ -29,6 +29,11 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
+      - name: Derive version
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Publish
         run: >
           dotnet publish Pinscreen2.App/Pinscreen2.App.csproj
@@ -38,6 +43,10 @@ jobs:
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:PublishTrimmed=false
+          -p:Version=${{ steps.ver.outputs.version }}
+          -p:AssemblyVersion=${{ steps.ver.outputs.version }}
+          -p:FileVersion=${{ steps.ver.outputs.version }}
+          -p:InformationalVersion=${{ steps.ver.outputs.version }}
           -o publish/${{ matrix.runtime }}
 
       - name: Zip (Linux/macOS)
@@ -56,6 +65,55 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload ${{ github.ref_name }} Pinscreen2-${{ matrix.runtime }}.zip --clobber
+
+  windows-installer:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          echo "C:\Program Files (x86)\Inno Setup 6" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Generate icon if missing
+        shell: pwsh
+        run: |
+          if (-not (Test-Path Pinscreen2.App\Assets\icon.ico)) {
+            python installer\generate_icon.py
+          }
+
+      - name: Derive version
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build installer
+        shell: pwsh
+        run: installer\build.ps1 -Version ${{ steps.ver.outputs.version }}
+
+      - name: Rename installer
+        shell: pwsh
+        run: |
+          $src = Get-ChildItem installer\Output\*.exe | Select-Object -First 1
+          $dst = "Pinscreen2_Setup_${{ github.ref_name }}_win-x64.exe"
+          Move-Item $src.FullName $dst -Force
+
+      - name: Upload release asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} "Pinscreen2_Setup_${{ github.ref_name }}_win-x64.exe" --clobber
 
   server:
     runs-on: windows-latest

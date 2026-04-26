@@ -62,11 +62,11 @@
                             <WrapPanel>
                                 <Button Name="BtnPlayPause" Margin="0,0,8,8" Foreground="White" Click="OnPlayPauseClicked">Play/Pause</Button>
                                 <Button Margin="0,0,8,8" Foreground="White" Click="OnNextClicked">Next</Button>
+                                <Button Margin="0,0,8,8" Foreground="White" Click="OnPreviewQueueClicked">Preview Queue</Button>
                                 <Button Margin="0,0,8,8" Foreground="White" Click="OnRebuildQueueClicked">Rebuild Queue</Button>
                                 <Button Margin="0,0,8,8" Foreground="White" Click="OnSetMediaFolderClicked">Set Media Folder…</Button>
                                 <Button Margin="0,0,8,8" Foreground="White" Click="OnToggleFullscreenClicked">Toggle Fullscreen</Button>
                                 <Button Margin="0,0,8,8" Foreground="White" Click="OnCheckUpdatesClicked">Check for Updates…</Button>
-                                <Button Margin="0,0,8,8" Foreground="White" Click="OnInstallUpdateZipClicked">Install Update Zip…</Button>
                                 <Button Margin="0,0,8,8" Foreground="White" Click="OnOpenConfigClicked">Open Config</Button>
                                 <Button Margin="0,0,8,8" Foreground="White" Click="OnOpenCurrentFolderClicked">Open Current Folder</Button>
                                 <Button Margin="0,0,8,8" Foreground="White" Click="OnQuitClicked">Quit</Button>
@@ -114,11 +114,6 @@
                                 <Button Foreground="White" Click="OnApplyRemoteUrlClicked">Apply</Button>
                                 <Button Foreground="White" Click="OnClearRemoteUrlClicked">Clear</Button>
                                 <Button Foreground="White" Click="OnSyncNowClicked">Sync Now</Button>
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                <TextBlock Text="Sync folder:" Foreground="#CCCCCC" VerticalAlignment="Center"/>
-                                <TextBlock Name="SyncFolderText" Foreground="White" VerticalAlignment="Center"/>
-                                <Button Foreground="White" Click="OnSetSyncFolderClicked">Set Sync Folder…</Button>
                             </StackPanel>
                         </StackPanel>
                         </ScrollViewer>
