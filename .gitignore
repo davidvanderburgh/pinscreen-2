@@ -50,5 +50,7 @@ Pinscreen2.App/Assets/icon.ico
 Pinscreen2.App/Assets/icon.png
 
 # Claude Code per-user state (settings, scheduled task locks, etc.)
-.claude/
+# but keep tracked skills in .claude/skills/
+.claude/*
+!.claude/skills/
 

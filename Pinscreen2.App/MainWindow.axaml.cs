@@ -609,7 +609,7 @@ public partial class MainWindow : Window
         // to the running version, and display the result. No download, no
         // self-update -- the user installs the new version themselves from the
         // releases page (matches the jjp-asset-decryptor pattern).
-        string current = GetLocalVersion()?.ToString() ?? "unknown";
+        string current = FormatVersion(GetLocalVersion());
         string releasesUrl = $"https://github.com/{GitHubUpdateRepo}/releases";
         try
         {
@@ -634,17 +634,18 @@ public partial class MainWindow : Window
 
             var latest = ParseVersion(tag);
             var local = GetLocalVersion();
+            string latestDisplay = latest != null ? FormatVersion(latest) : (string.IsNullOrWhiteSpace(tag) ? "(unknown)" : tag);
             string verdict;
             if (latest != null && local != null && latest > local)
-                verdict = $"Update available: {tag}";
+                verdict = $"Update available: {latestDisplay}";
             else if (latest != null && local != null && latest <= local)
                 verdict = "You're up to date.";
             else
-                verdict = $"Latest release: {tag}";
+                verdict = $"Latest release: {latestDisplay}";
 
             var msg = verdict + "\n\n" +
                       $"Current version: {current}\n" +
-                      $"Latest version:  {(string.IsNullOrWhiteSpace(tag) ? "(unknown)" : tag)}" +
+                      $"Latest version:  {latestDisplay}" +
                       (string.IsNullOrWhiteSpace(name) || name == tag ? "" : $"  ({name})") + "\n" +
                       (string.IsNullOrWhiteSpace(publishedAt) ? "" : $"Published:       {publishedAt}\n");
             await ShowMessageAsync(msg, htmlUrl);
@@ -734,8 +735,27 @@ public partial class MainWindow : Window
     {
         if (string.IsNullOrWhiteSpace(v)) return null;
         var s = v.Trim().TrimStart('v', 'V');
+        // Strip semver pre-release / build metadata (e.g. "1.7.2+abc" or "1.7.2-rc1")
+        // so System.Version.TryParse accepts them.
+        var plus = s.IndexOf('+');
+        if (plus >= 0) s = s.Substring(0, plus);
+        var dash = s.IndexOf('-');
+        if (dash >= 0) s = s.Substring(0, dash);
         Version ver;
         return Version.TryParse(s, out ver) ? ver : null;
+    }
+
+    // Render a Version as "v<major>.<minor>.<build>", trimming any trailing .0
+    // segments so "1.7.1.0" displays as "v1.7.1" -- matches the GitHub tag style.
+    private static string FormatVersion(Version? v)
+    {
+        if (v == null) return "unknown";
+        int major = Math.Max(0, v.Major);
+        int minor = Math.Max(0, v.Minor);
+        int build = Math.Max(0, v.Build);
+        int rev   = Math.Max(0, v.Revision);
+        if (rev > 0) return $"v{major}.{minor}.{build}.{rev}";
+        return $"v{major}.{minor}.{build}";
     }
 
     private Task ShowMessageAsync(string text) => ShowMessageAsync(text, null);
