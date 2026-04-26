@@ -112,11 +112,12 @@ public partial class MainWindow : Window
         // hang and crash reports -- the timer-driven path is deterministic
         // and idempotent.
 
-        // Kick off the playlist scan in the background. With ~30k files on a
-        // slow disk this takes several seconds; we don't want to block window
-        // show, LibVLC init, or VideoView attach. PlayNext() handles an empty
-        // playlist by retrying after BuildPlaylistAsync completes.
-        _ = BuildPlaylistAsync();
+        // Kick off the playlist build in the background using the persisted
+        // file cache when available -- on launches with large libraries this
+        // is effectively instant. The cache is refreshed in the background
+        // for next launch. PlayNext() handles an empty playlist by retrying
+        // after BuildPlaylistAsync completes.
+        _ = BuildPlaylistAsync(useCache: true);
 
         // Initialize LibVLC with software decode; let VideoView callbacks choose vout
         try
@@ -1431,7 +1432,9 @@ public partial class MainWindow : Window
         catch { }
     }
 
-    private async Task BuildPlaylistAsync()
+    private async Task BuildPlaylistAsync() => await BuildPlaylistAsync(useCache: false);
+
+    private async Task BuildPlaylistAsync(bool useCache)
     {
         var collected = new List<string>();
         int totalFound = 0;
@@ -1440,25 +1443,51 @@ public partial class MainWindow : Window
         // library URL is set, Sync downloads INTO the first media folder, and
         // a regular scan picks the files up just like local content.
         var folders = _config.MediaFolders.ToList();
-        await Task.Run(() =>
-        {
-            foreach (var folder in folders)
-            {
-                var resolved = ResolveFolderPath(folder);
-                if (string.IsNullOrWhiteSpace(resolved) || !Directory.Exists(resolved))
-                {
-                    Console.WriteLine($"Scan skip: folder not found -> '{folder}' (resolved='{resolved}')");
-                    continue;
-                }
-                Console.WriteLine($"Scanning: {resolved}");
+        var resolvedFolders = folders
+            .Select(ResolveFolderPath)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p!)
+            .ToList();
 
-                foreach (var file in EnumerateVideoFilesSafe(resolved))
-                {
-                    collected.Add(file);
-                    totalFound++;
-                }
+        bool builtFromCache = false;
+        if (useCache)
+        {
+            var cached = TryLoadPlaylistCache(resolvedFolders);
+            if (cached != null && cached.Count > 0)
+            {
+                collected.AddRange(cached);
+                totalFound = cached.Count;
+                builtFromCache = true;
+                Console.WriteLine($"Playlist cache hit: {cached.Count} files (folders={string.Join(",", resolvedFolders)})");
+                // Refresh the cache in the background so next launch has fresh
+                // data. Don't rebuild the running playlist -- predictable
+                // behavior is to only change the queue on explicit Rebuild.
+                _ = Task.Run(() => RefreshPlaylistCache(resolvedFolders));
             }
-        });
+        }
+
+        if (!builtFromCache)
+        {
+            await Task.Run(() =>
+            {
+                foreach (var resolved in resolvedFolders)
+                {
+                    if (!Directory.Exists(resolved))
+                    {
+                        Console.WriteLine($"Scan skip: folder not found -> '{resolved}'");
+                        continue;
+                    }
+                    Console.WriteLine($"Scanning: {resolved}");
+
+                    foreach (var file in EnumerateVideoFilesSafe(resolved))
+                    {
+                        collected.Add(file);
+                        totalFound++;
+                    }
+                }
+            });
+            try { SavePlaylistCache(resolvedFolders, collected); } catch { }
+        }
 
         // Randomize order each build
         var rng = new Random();
@@ -1539,6 +1568,83 @@ public partial class MainWindow : Window
 
         Console.WriteLine($"Scan complete: {_playlist.Count} files queued (found {totalFound})");
         UpdateStatus();
+    }
+
+    // ---- Playlist cache --------------------------------------------------
+    // Persisted at %LOCALAPPDATA%\Pinscreen2\playlist.cache.json. On startup
+    // we use the cache to build the playlist instantly, then refresh it in
+    // the background. Saves several seconds on launches with large libraries.
+
+    private class PlaylistCacheDto
+    {
+        public List<string> Folders { get; set; } = new();
+        public List<string> Files { get; set; } = new();
+        public string SavedAt { get; set; } = string.Empty;
+    }
+
+    private static string PlaylistCachePath()
+    {
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Pinscreen2");
+        Directory.CreateDirectory(dir);
+        return Path.Combine(dir, "playlist.cache.json");
+    }
+
+    private static List<string>? TryLoadPlaylistCache(List<string> currentFolders)
+    {
+        try
+        {
+            var path = PlaylistCachePath();
+            if (!File.Exists(path)) return null;
+            var json = File.ReadAllText(path);
+            var dto = JsonSerializer.Deserialize<PlaylistCacheDto>(json);
+            if (dto == null) return null;
+            // Cache is only valid if the folder set matches exactly.
+            var a = dto.Folders.OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList();
+            var b = currentFolders.OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList();
+            if (a.Count != b.Count) return null;
+            for (int i = 0; i < a.Count; i++)
+                if (!string.Equals(a[i], b[i], StringComparison.OrdinalIgnoreCase)) return null;
+            // Drop entries whose files no longer exist; if too many are gone,
+            // reject the cache so we re-scan instead.
+            var alive = dto.Files.Where(File.Exists).ToList();
+            if (dto.Files.Count > 0 && alive.Count < dto.Files.Count * 0.8) return null;
+            return alive;
+        }
+        catch { return null; }
+    }
+
+    private static void SavePlaylistCache(List<string> folders, List<string> files)
+    {
+        try
+        {
+            var dto = new PlaylistCacheDto
+            {
+                Folders = folders,
+                Files = files,
+                SavedAt = DateTime.UtcNow.ToString("O"),
+            };
+            File.WriteAllText(PlaylistCachePath(),
+                JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = false }));
+        }
+        catch { }
+    }
+
+    private static void RefreshPlaylistCache(List<string> folders)
+    {
+        try
+        {
+            var fresh = new List<string>();
+            foreach (var f in folders)
+            {
+                if (!Directory.Exists(f)) continue;
+                fresh.AddRange(EnumerateVideoFilesSafe(f));
+            }
+            SavePlaylistCache(folders, fresh);
+            Console.WriteLine($"Playlist cache refreshed: {fresh.Count} files");
+        }
+        catch { }
     }
 
     private static IEnumerable<string> EnumerateVideoFilesSafe(string root)
