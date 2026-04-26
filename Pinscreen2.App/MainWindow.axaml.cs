@@ -100,6 +100,7 @@ public partial class MainWindow : Window
         _delaySeconds = Math.Clamp(_config.DelaySeconds, 0, 10);
         _isInitializingUi = false; // prevent UI event handlers from saving during initial layout
         SetupClock();
+        this.Activated += OnWindowActivatedRestoreFullScreen;
         this.AttachedToVisualTree += (_, __) =>
         {
             try { UpdateClock(); } catch { }
@@ -501,18 +502,35 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    private bool _restoreFullScreenOnActivate;
     private void OpenExternalAndYieldFocus(string path)
     {
         // The Pinscreen window is fullscreen + topmost (and the clock is in a
         // topmost popup), so OS-launched apps like Notepad/Explorer open behind
         // it. Drop topmost, exit fullscreen, hide the overlay+clock popups, and
-        // minimize so the new window can take focus.
+        // minimize so the new window can take focus. When the user comes back
+        // to Pinscreen (taskbar click / alt-tab), the Activated handler below
+        // puts it back into fullscreen.
         try { ToggleOverlay(false); } catch { }
         try { if (ClockPopup != null) ClockPopup.IsOpen = false; } catch { }
         try { this.Topmost = false; } catch { }
         try { if (WindowState == WindowState.FullScreen) WindowState = WindowState.Normal; } catch { }
+        _restoreFullScreenOnActivate = true;
         try { WindowState = WindowState.Minimized; } catch { }
         OpenWithOS(path);
+    }
+
+    private void OnWindowActivatedRestoreFullScreen(object? sender, EventArgs e)
+    {
+        if (!_restoreFullScreenOnActivate) return;
+        _restoreFullScreenOnActivate = false;
+        Dispatcher.UIThread.Post(() =>
+        {
+            try { WindowState = WindowState.FullScreen; } catch { }
+            try { this.Topmost = true; } catch { }
+            try { if (ClockPopup != null) ClockPopup.IsOpen = true; } catch { }
+            try { UpdateClock(); } catch { }
+        }, DispatcherPriority.Background);
     }
 
     private async void OnSetMediaFolderClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
