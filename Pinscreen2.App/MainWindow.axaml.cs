@@ -119,10 +119,17 @@ public partial class MainWindow : Window
         // after BuildPlaylistAsync completes.
         _ = BuildPlaylistAsync(useCache: true);
 
-        // Initialize LibVLC with software decode; let VideoView callbacks choose vout
+        // Initialize LibVLC. On Windows we use direct3d11 video output -- the
+        // opengl module is the documented source of c0000005 access violations
+        // on cheap iGPUs. Software decode (--avcodec-hw=none) avoids a second
+        // class of GPU-driver crashes for the same reason. On other platforms
+        // let VLC pick the default vout.
         try
         {
-            _libVlc = new LibVLC(new[] { "--vout=opengl", "--avcodec-hw=none", "--no-video-title-show" });
+            var vlcArgs = new System.Collections.Generic.List<string> { "--avcodec-hw=none", "--no-video-title-show", "--quiet" };
+            if (OperatingSystem.IsWindows())
+                vlcArgs.Add("--vout=direct3d11");
+            _libVlc = new LibVLC(vlcArgs.ToArray());
             _mediaPlayer = new MediaPlayer(_libVlc);
             _mediaPlayer.EncounteredError += (_, __) => Dispatcher.UIThread.Post(PlayNext);
             _libVlcInitFailed = false;
