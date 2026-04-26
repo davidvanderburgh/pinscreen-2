@@ -54,7 +54,6 @@ jobs:
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:PublishTrimmed=false
-          -p:PublishReadyToRun=true
           -p:Version=${{ steps.ver.outputs.version }}
           -p:AssemblyVersion=${{ steps.ver.outputs.version }}
           -p:FileVersion=${{ steps.ver.outputs.version }}

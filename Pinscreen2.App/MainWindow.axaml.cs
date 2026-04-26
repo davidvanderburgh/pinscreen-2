@@ -136,33 +136,58 @@ public partial class MainWindow : Window
         // Disable VLC marquee to avoid conflicting clock overlays
         try { _mediaPlayer?.SetMarqueeInt(VideoMarqueeOption.Enable, 0); } catch { }
 
-        // Defer attaching the MediaPlayer until the VideoView is attached and sized
+        // Attach MediaPlayer to VideoView only after the native HWND is ready
+        // and Bounds are non-zero. If Play() runs before that, VLC opens its
+        // own native sub-window. Drive the attach from VideoView.AttachedToVisualTree
+        // and retry on Bounds changes until we get a real size. Once attached,
+        // try to start playback (it'll wait if the playlist is still building).
         VideoView.AttachedToVisualTree += (_, __) =>
         {
-            Dispatcher.UIThread.Post(() =>
+            TryAttachMediaPlayer();
+            // Bounds may not be set on the very first attach event on slow hardware.
+            // Listen for BoundsProperty changes until we successfully attach.
+            VideoView.PropertyChanged += (_, ev) =>
             {
-                if (_mediaPlayer == null) return;
-                if (VideoView.MediaPlayer == null && VideoView.Bounds.Width > 0 && VideoView.Bounds.Height > 0)
-                {
-                    VideoView.MediaPlayer = _mediaPlayer;
-                    _mediaPlayer.EndReached += (_, __) => Dispatcher.UIThread.Post(PlayNext);
-                    // Ensure overlay is hidden so VideoView is visible
-                    try { if (OverlayPopup != null) OverlayPopup.IsOpen = false; } catch { }
-                    PlayNext();
-                }
-            }, DispatcherPriority.Render);
+                if (ev.Property == Visual.BoundsProperty && VideoView.MediaPlayer == null)
+                    TryAttachMediaPlayer();
+            };
         };
+    }
 
-        // If already visible, try immediate attach
-        if (_mediaPlayer != null && VideoView.IsEffectivelyVisible && VideoView.MediaPlayer == null)
+    private void TryAttachMediaPlayer()
+    {
+        try
         {
+            if (_mediaPlayer == null) return;
+            if (VideoView.MediaPlayer != null) return;
+            if (VideoView.Bounds.Width <= 0 || VideoView.Bounds.Height <= 0) return;
+
             VideoView.MediaPlayer = _mediaPlayer;
             _mediaPlayer.EndReached += (_, __) => Dispatcher.UIThread.Post(PlayNext);
             try { if (OverlayPopup != null) OverlayPopup.IsOpen = false; } catch { }
+            TryStartPlayback();
+        }
+        catch (Exception ex)
+        {
+            try { Console.WriteLine($"TryAttachMediaPlayer failed: {ex.Message}"); } catch { }
+        }
+    }
+
+    private void TryStartPlayback()
+    {
+        // Idempotent: only start if attached, not already playing, and the
+        // playlist has at least one item. Called from both the VideoView
+        // attach path and the BuildPlaylistAsync completion path so whichever
+        // happens last kicks playback off.
+        try
+        {
+            if (_mediaPlayer == null) return;
+            if (VideoView.MediaPlayer == null) return;
+            if (_mediaPlayer.IsPlaying) return;
+            if (_playlist.Count == 0) return;
             PlayNext();
         }
-
-        // Removed external OverlayWindow to keep overlay contained within the app window
+        catch { }
     }
 
     private void ToggleOverlay(bool? force = null)
@@ -1568,6 +1593,9 @@ public partial class MainWindow : Window
 
         Console.WriteLine($"Scan complete: {_playlist.Count} files queued (found {totalFound})");
         UpdateStatus();
+        // If the VideoView already attached and was waiting for a playlist,
+        // start playback now. Idempotent.
+        try { Dispatcher.UIThread.Post(TryStartPlayback); } catch { }
     }
 
     // ---- Playlist cache --------------------------------------------------
