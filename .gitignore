@@ -49,6 +49,6 @@ installer/build/
 Pinscreen2.App/Assets/icon.ico
 Pinscreen2.App/Assets/icon.png
 
-# Claude Code per-user settings
-.claude/settings.local.json
+# Claude Code per-user state (settings, scheduled task locks, etc.)
+.claude/
 
