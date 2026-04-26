@@ -29,6 +29,17 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate icon if missing
+        shell: bash
+        run: |
+          if [ ! -f Pinscreen2.App/Assets/icon.ico ]; then
+            python installer/generate_icon.py
+          fi
+
       - name: Derive version
         id: ver
         shell: bash
