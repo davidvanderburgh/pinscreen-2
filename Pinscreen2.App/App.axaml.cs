@@ -10,6 +10,8 @@ namespace Pinscreen2.App;
 
 public partial class App : Application
 {
+    private static StreamWriter? _stdLog;
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
@@ -17,26 +19,42 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
-        // Catch otherwise-fatal exceptions and write them to a crash log so we
-        // can diagnose intermittent failures (e.g. on monitor wake) instead of
-        // the process just disappearing.
-        WireCrashLogging();
+        // Diagnostics: pipe stdout/stderr (including LibVLC native output) to a
+        // log file, write a startup line, and wire managed unhandled-exception
+        // handlers. Native crashes (LibVLC, OpenGL drivers) bypass the .NET
+        // handlers, so the stdout/stderr log is often the only forensic trail.
+        WireDiagnostics();
+        AppDomain.CurrentDomain.ProcessExit += (_, __) => Log("ProcessExit (clean shutdown)");
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new MainWindow();
+            desktop.Exit += (_, __) => Log("Desktop.Exit");
         }
 
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static string CrashLogPath()
+    private static string LogDir()
     {
         var dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Pinscreen2");
         Directory.CreateDirectory(dir);
-        return Path.Combine(dir, "crash.log");
+        return dir;
+    }
+
+    private static string CrashLogPath() => Path.Combine(LogDir(), "crash.log");
+    private static string AppLogPath()   => Path.Combine(LogDir(), "app.log");
+
+    private static void Log(string message)
+    {
+        try
+        {
+            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
+            File.AppendAllText(AppLogPath(), line);
+        }
+        catch { }
     }
 
     private static void LogCrash(string source, Exception? ex)
@@ -45,13 +63,26 @@ public partial class App : Application
         {
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {source}: {ex}{Environment.NewLine}";
             File.AppendAllText(CrashLogPath(), line);
-            Console.Error.WriteLine(line);
+            File.AppendAllText(AppLogPath(), line);
         }
         catch { }
     }
 
-    private static void WireCrashLogging()
+    private static void WireDiagnostics()
     {
+        // Tee stdout + stderr to app.log. LibVLC writes diagnostics to stderr
+        // before it dies, which is usually the only clue a native crash gives.
+        try
+        {
+            var fs = new FileStream(AppLogPath(), FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            _stdLog = new StreamWriter(fs) { AutoFlush = true };
+            Console.SetOut(new TeeWriter(Console.Out, _stdLog));
+            Console.SetError(new TeeWriter(Console.Error, _stdLog));
+        }
+        catch { }
+
+        Log($"=== App start === pid={Environment.ProcessId} version={typeof(App).Assembly.GetName().Version}");
+
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             LogCrash("AppDomain.UnhandledException", e.ExceptionObject as Exception);
         TaskScheduler.UnobservedTaskException += (_, e) =>
@@ -68,5 +99,17 @@ public partial class App : Application
             };
         }
         catch { }
+    }
+
+    // Writes to two TextWriters at once (original console + log file).
+    private sealed class TeeWriter : TextWriter
+    {
+        private readonly TextWriter _a, _b;
+        public TeeWriter(TextWriter a, TextWriter b) { _a = a; _b = b; }
+        public override System.Text.Encoding Encoding => _a.Encoding;
+        public override void Write(char value) { try { _a.Write(value); } catch { } try { _b.Write(value); } catch { } }
+        public override void Write(string? value) { try { _a.Write(value); } catch { } try { _b.Write(value); } catch { } }
+        public override void WriteLine(string? value) { try { _a.WriteLine(value); } catch { } try { _b.WriteLine(value); } catch { } }
+        public override void Flush() { try { _a.Flush(); } catch { } try { _b.Flush(); } catch { } }
     }
 }
