@@ -13,6 +13,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Net.Http;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using Avalonia.Interactivity;
@@ -490,6 +491,30 @@ public partial class MainWindow : Window
                 {
                     detail.Text = string.Empty;
                 }
+            }
+        }
+        catch { }
+    }
+
+    // Reuse the SyncHudPopup to show progress during the initial library scan.
+    // Indeterminate bar + a rolling file count -- the scan is recursive yield
+    // so we never know the total upfront, but the count rising tells the user
+    // the app is working, not hung.
+    private void ShowScanHud(bool visible) => ShowSyncHud(visible);
+
+    private void UpdateScanHud(string message, string folder, int count)
+    {
+        try
+        {
+            var text = this.FindControl<TextBlock>("SyncHudText");
+            var bar = this.FindControl<ProgressBar>("SyncHudBar");
+            var detail = this.FindControl<TextBlock>("SyncHudDetail");
+            if (text != null) text.Text = message;
+            if (bar != null) bar.IsIndeterminate = true;
+            if (detail != null)
+            {
+                var folderShort = string.IsNullOrEmpty(folder) ? string.Empty : $"  ({folder})";
+                detail.Text = $"{count:N0} files found{folderShort}";
             }
         }
         catch { }
@@ -1508,27 +1533,49 @@ public partial class MainWindow : Window
 
         if (!builtFromCache)
         {
-            await Task.Run(() =>
-            {
-                foreach (var resolved in resolvedFolders)
-                {
-                    if (!Directory.Exists(resolved))
-                    {
-                        Console.WriteLine($"Scan skip: folder not found -> '{resolved}'");
-                        continue;
-                    }
-                    Console.WriteLine($"Scanning: {resolved}");
+            // Show a progress HUD during the scan -- on first launch with a
+            // big library this is the only thing that takes any noticeable
+            // time and we don't want it to look like the app is hung.
+            string currentFolder = string.Empty;
+            int scannedCount = 0;
+            ShowScanHud(true);
+            UpdateScanHud("Scanning library…", currentFolder, scannedCount);
+            var hudTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+            hudTimer.Tick += (_, __) =>
+                UpdateScanHud("Scanning library…", currentFolder, Volatile.Read(ref scannedCount));
+            hudTimer.Start();
 
-                    foreach (var file in EnumerateVideoFilesSafe(resolved))
+            try
+            {
+                await Task.Run(() =>
+                {
+                    foreach (var resolved in resolvedFolders)
                     {
-                        long size = 0;
-                        try { size = new FileInfo(file).Length; } catch { }
-                        collected.Add((file, size));
-                        totalFound++;
+                        if (!Directory.Exists(resolved))
+                        {
+                            Console.WriteLine($"Scan skip: folder not found -> '{resolved}'");
+                            continue;
+                        }
+                        Console.WriteLine($"Scanning: {resolved}");
+                        currentFolder = resolved;
+
+                        foreach (var file in EnumerateVideoFilesSafe(resolved))
+                        {
+                            long size = 0;
+                            try { size = new FileInfo(file).Length; } catch { }
+                            collected.Add((file, size));
+                            totalFound++;
+                            Interlocked.Increment(ref scannedCount);
+                        }
                     }
-                }
-            });
-            try { SavePlaylistCache(resolvedFolders, collected); } catch { }
+                });
+                try { SavePlaylistCache(resolvedFolders, collected); } catch { }
+            }
+            finally
+            {
+                hudTimer.Stop();
+                ShowScanHud(false);
+            }
         }
 
         // Randomize order each build
