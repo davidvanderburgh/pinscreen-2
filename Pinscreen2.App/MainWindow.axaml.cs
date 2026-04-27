@@ -119,16 +119,22 @@ public partial class MainWindow : Window
         // after BuildPlaylistAsync completes.
         _ = BuildPlaylistAsync(useCache: true);
 
-        // Initialize LibVLC. On Windows we use direct3d11 video output -- the
-        // opengl module is the documented source of c0000005 access violations
-        // on cheap iGPUs. Software decode (--avcodec-hw=none) avoids a second
-        // class of GPU-driver crashes for the same reason. On other platforms
-        // let VLC pick the default vout.
+        // Initialize LibVLC. On Windows we default to the direct3d9 video
+        // output module: it goes through different driver entry points than
+        // direct3d11/opengl and is much more stable on legacy Intel HD
+        // Graphics drivers (the kind found on cheap mini-PC pinscreens) where
+        // d3d11 / opengl reliably AV inside igd10iumd64.dll. Software decode
+        // (--avcodec-hw=none) avoids the same crash class on the decoder side.
+        // The vout is overridable via config (VlcVideoOutput) so we can
+        // iterate without shipping a new build.
         try
         {
             var vlcArgs = new System.Collections.Generic.List<string> { "--avcodec-hw=none", "--no-video-title-show", "--quiet" };
-            if (OperatingSystem.IsWindows())
-                vlcArgs.Add("--vout=direct3d11");
+            if (!string.IsNullOrWhiteSpace(_config.VlcVideoOutput))
+                vlcArgs.Add($"--vout={_config.VlcVideoOutput}");
+            else if (OperatingSystem.IsWindows())
+                vlcArgs.Add("--vout=direct3d9");
+            Console.WriteLine($"LibVLC args: {string.Join(' ', vlcArgs)}");
             _libVlc = new LibVLC(vlcArgs.ToArray());
             _mediaPlayer = new MediaPlayer(_libVlc);
             _mediaPlayer.EncounteredError += (_, __) => Dispatcher.UIThread.Post(PlayNext);
@@ -1870,4 +1876,8 @@ public class AppConfig
     public int DelaySeconds { get; set; } = 3;
     public double ClockFontSize { get; set; } = 72.0;
     public string RemoteLibraryUrl { get; set; } = string.Empty;
+    // LibVLC video output module override. Empty = platform default
+    // ("direct3d9" on Windows; let VLC pick elsewhere). Set to e.g.
+    // "direct3d11", "wingdi", or "gl" to work around driver-specific crashes.
+    public string VlcVideoOutput { get; set; } = string.Empty;
 }
