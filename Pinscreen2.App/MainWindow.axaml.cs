@@ -137,21 +137,24 @@ public partial class MainWindow : Window
             }, DispatcherPriority.Background);
         }
 
-        // Initialize LibVLC. On Windows we default to the direct3d9 video
-        // output module: it goes through different driver entry points than
-        // direct3d11/opengl and is much more stable on legacy Intel HD
-        // Graphics drivers (the kind found on cheap mini-PC pinscreens) where
-        // d3d11 / opengl reliably AV inside igd10iumd64.dll. Software decode
-        // (--avcodec-hw=none) avoids the same crash class on the decoder side.
-        // The vout is overridable via config (VlcVideoOutput) so we can
-        // iterate without shipping a new build.
+        // Initialize LibVLC. On Windows we default to the wingdi video output
+        // module -- pure GDI software rendering with no D3D / DXVA calls. The
+        // direct3d11 / direct3d9 / opengl vouts all eventually route through
+        // the Intel HD Graphics user-mode drivers (igd10iumd64.dll,
+        // igd11dxva64.dll, ...), and the 2016-era version shipped with the
+        // cheap mini-PCs we target reliably AVs inside those DLLs. wingdi is
+        // slower for high-res content but bulletproof, and the library here
+        // is 1080p or smaller. Software decode (--avcodec-hw=none) covers
+        // the same crash class on the decoder side. Override via config
+        // (VlcVideoOutput) -- e.g. set "direct3d11" if you've updated the
+        // graphics driver and want hardware-accelerated rendering back.
         try
         {
             var vlcArgs = new System.Collections.Generic.List<string> { "--avcodec-hw=none", "--no-video-title-show", "--quiet" };
             if (!string.IsNullOrWhiteSpace(_config.VlcVideoOutput))
                 vlcArgs.Add($"--vout={_config.VlcVideoOutput}");
             else if (OperatingSystem.IsWindows())
-                vlcArgs.Add("--vout=direct3d9");
+                vlcArgs.Add("--vout=wingdi");
             Console.WriteLine($"LibVLC args: {string.Join(' ', vlcArgs)}");
             _libVlc = new LibVLC(vlcArgs.ToArray());
             _mediaPlayer = new MediaPlayer(_libVlc);
