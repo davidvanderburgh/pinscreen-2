@@ -1474,7 +1474,9 @@ public partial class MainWindow : Window
 
     private async Task BuildPlaylistAsync(bool useCache)
     {
-        var collected = new List<string>();
+        // (path, size). Size is captured during scan or loaded from cache so
+        // the bucket-by-size grouping below doesn't need to stat every file.
+        var collected = new List<(string Path, long Size)>();
         int totalFound = 0;
 
         // Single source of truth: the configured media folders. When a remote
@@ -1519,7 +1521,9 @@ public partial class MainWindow : Window
 
                     foreach (var file in EnumerateVideoFilesSafe(resolved))
                     {
-                        collected.Add(file);
+                        long size = 0;
+                        try { size = new FileInfo(file).Length; } catch { }
+                        collected.Add((file, size));
                         totalFound++;
                     }
                 }
@@ -1529,7 +1533,7 @@ public partial class MainWindow : Window
 
         // Randomize order each build
         var rng = new Random();
-        IEnumerable<string> finalOrder = collected;
+        IEnumerable<string> finalOrder = collected.Select(it => it.Path);
         if (_config.BalanceQueueByGame)
         {
             // Two-level interleave: outer loop rotates SIZE BUCKETS so adjacent
@@ -1542,10 +1546,10 @@ public partial class MainWindow : Window
             // those bucket sequences.
 
             var perKey = collected
-                .GroupBy(GetGroupKey) // "<game>|<bucket>"
+                .GroupBy(it => GetGroupKey(it.Path, it.Size)) // "<game>|<bucket>"
                 .ToDictionary(
                     g => g.Key,
-                    g => new Queue<string>(g.OrderBy(_ => rng.Next())));
+                    g => new Queue<string>(g.Select(it => it.Path).OrderBy(_ => rng.Next())));
 
             // bucket -> ordered list of game-keys for round-robin
             var bucketToKeys = perKey.Keys
@@ -1597,7 +1601,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            finalOrder = collected.OrderBy(_ => rng.Next()).ToList();
+            finalOrder = collected.Select(it => it.Path).OrderBy(_ => rng.Next()).ToList();
         }
 
         _playlist.Clear();
@@ -1616,10 +1620,19 @@ public partial class MainWindow : Window
     // we use the cache to build the playlist instantly, then refresh it in
     // the background. Saves several seconds on launches with large libraries.
 
+    private class PlaylistCacheItem
+    {
+        public string P { get; set; } = string.Empty; // path
+        public long S { get; set; }                    // size bytes
+    }
+
     private class PlaylistCacheDto
     {
         public List<string> Folders { get; set; } = new();
-        public List<string> Files { get; set; } = new();
+        // Legacy schema (v1.7.5-1.7.8): list of paths with no sizes.
+        public List<string>? Files { get; set; }
+        // New schema: list of {P=path, S=size}.
+        public List<PlaylistCacheItem>? Items { get; set; }
         public string SavedAt { get; set; } = string.Empty;
     }
 
@@ -1632,7 +1645,10 @@ public partial class MainWindow : Window
         return Path.Combine(dir, "playlist.cache.json");
     }
 
-    private static List<string>? TryLoadPlaylistCache(List<string> currentFolders)
+    // Loaded cache is returned as (path, size) pairs so the playlist build does
+    // NOT need to stat each file again to bucket by size. This is the main
+    // startup cost on libraries with tens of thousands of files.
+    private static List<(string Path, long Size)>? TryLoadPlaylistCache(List<string> currentFolders)
     {
         try
         {
@@ -1647,23 +1663,27 @@ public partial class MainWindow : Window
             if (a.Count != b.Count) return null;
             for (int i = 0; i < a.Count; i++)
                 if (!string.Equals(a[i], b[i], StringComparison.OrdinalIgnoreCase)) return null;
-            // Drop entries whose files no longer exist; if too many are gone,
-            // reject the cache so we re-scan instead.
-            var alive = dto.Files.Where(File.Exists).ToList();
-            if (dto.Files.Count > 0 && alive.Count < dto.Files.Count * 0.8) return null;
-            return alive;
+
+            // Don't File.Exists every entry on load -- 30k stats negates the
+            // point of the cache. Trust it; if a few files are gone, VLC will
+            // skip them and the background refresh will rebuild without them.
+            if (dto.Items != null && dto.Items.Count > 0)
+                return dto.Items.Select(it => (it.P, it.S)).ToList();
+            if (dto.Files != null && dto.Files.Count > 0)
+                return dto.Files.Select(p => (p, 0L)).ToList(); // legacy: size unknown
+            return null;
         }
         catch { return null; }
     }
 
-    private static void SavePlaylistCache(List<string> folders, List<string> files)
+    private static void SavePlaylistCache(List<string> folders, List<(string Path, long Size)> items)
     {
         try
         {
             var dto = new PlaylistCacheDto
             {
                 Folders = folders,
-                Files = files,
+                Items = items.Select(it => new PlaylistCacheItem { P = it.Path, S = it.Size }).ToList(),
                 SavedAt = DateTime.UtcNow.ToString("O"),
             };
             File.WriteAllText(PlaylistCachePath(),
@@ -1672,15 +1692,22 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    // Walks the folders, captures each file's size, writes the cache. Stat
+    // cost is paid here (background) instead of on the next startup.
     private static void RefreshPlaylistCache(List<string> folders)
     {
         try
         {
-            var fresh = new List<string>();
+            var fresh = new List<(string Path, long Size)>();
             foreach (var f in folders)
             {
                 if (!Directory.Exists(f)) continue;
-                fresh.AddRange(EnumerateVideoFilesSafe(f));
+                foreach (var path in EnumerateVideoFilesSafe(f))
+                {
+                    long size = 0;
+                    try { size = new FileInfo(path).Length; } catch { }
+                    fresh.Add((path, size));
+                }
             }
             SavePlaylistCache(folders, fresh);
             Console.WriteLine($"Playlist cache refreshed: {fresh.Count} files");
@@ -1747,14 +1774,14 @@ public partial class MainWindow : Window
         return configuredPath;
     }
 
-    private static string GetGroupKey(string item)
+    private static string GetGroupKey(string item, long size)
     {
         // Group by (game, coarse-size-bucket) so multi-format games (e.g. tiny
         // amber-DMD strips alongside full-resolution LCD clips) interleave by
         // both game AND visual format. File size is a cheap proxy for format.
+        // Size is supplied by the caller (from the cache or scan) so this is
+        // O(1) -- no per-file stat.
         var game = new DirectoryInfo(Path.GetDirectoryName(item) ?? string.Empty).Name;
-        long size = 0;
-        try { size = new FileInfo(item).Length; } catch { }
         // log2 bucket grouped by 2 powers: <512KB, <2MB, <8MB, <32MB, <128MB, ≥128MB
         int bucket = size <= 0 ? 0 : (int)Math.Floor(Math.Log2(size) / 2.0);
         return game + "|" + bucket;
