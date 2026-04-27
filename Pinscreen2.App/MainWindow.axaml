@@ -58,6 +58,21 @@
                         <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                         <StackPanel Spacing="12">
                             <TextBlock Text="Pinscreen Options" FontSize="24" Foreground="White"/>
+                            <Border Name="FirstRunBanner"
+                                    Background="#553300"
+                                    CornerRadius="6"
+                                    Padding="12,10"
+                                    IsVisible="False">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Foreground="#FFCC88" FontWeight="Bold" Text="Your video library hasn't been scanned yet."/>
+                                    <TextBlock Foreground="#FFE0B0" TextWrapping="Wrap"
+                                               Text="The first scan can take a while on big libraries. After it finishes once, future launches load instantly from a cache."/>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Foreground="White" Click="OnScanLibraryClicked">Scan Library</Button>
+                                        <Button Foreground="White" Click="OnSetMediaFolderClicked">Choose Different Folder…</Button>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
                             <Separator/>
                             <WrapPanel>
                                 <Button Name="BtnPlayPause" Margin="0,0,8,8" Foreground="White" Click="OnPlayPauseClicked">Play/Pause</Button>

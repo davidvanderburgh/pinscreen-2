@@ -43,6 +43,7 @@ public partial class MainWindow : Window
     private string _remoteStatus = string.Empty;
     private bool _isSyncing = false;
     private bool _isInitializingUi = true;
+    private bool _needsInitialScan = false;
     private string _effectiveConfigPath = string.Empty;
     private const string GitHubUpdateRepo = "davidvanderburgh/pinscreen-2"; // permanently linked repo
     // Expose config for overlay window
@@ -113,12 +114,28 @@ public partial class MainWindow : Window
         // hang and crash reports -- the timer-driven path is deterministic
         // and idempotent.
 
-        // Kick off the playlist build in the background using the persisted
-        // file cache when available -- on launches with large libraries this
-        // is effectively instant. The cache is refreshed in the background
-        // for next launch. PlayNext() handles an empty playlist by retrying
-        // after BuildPlaylistAsync completes.
-        _ = BuildPlaylistAsync(useCache: true);
+        // Playlist startup policy:
+        //   * Cache present: load from cache (instant) and refresh in the
+        //     background. App is up and playing immediately.
+        //   * No cache: do NOT auto-scan. The first scan on a big library
+        //     takes a long time and would silently delay the app from
+        //     appearing. Instead let the window come up immediately and
+        //     show a banner prompting the user to start the scan.
+        if (HasPlaylistCache(_config.MediaFolders.Select(ResolveFolderPath).Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p!).ToList()))
+        {
+            _ = BuildPlaylistAsync(useCache: true);
+        }
+        else
+        {
+            _needsInitialScan = true;
+            // Auto-open the overlay once the window is up so the prompt is
+            // visible without requiring the user to click first.
+            Dispatcher.UIThread.Post(() =>
+            {
+                try { ToggleOverlay(true); } catch { }
+                try { UpdateStatus(); } catch { }
+            }, DispatcherPriority.Background);
+        }
 
         // Initialize LibVLC. On Windows we default to the direct3d9 video
         // output module: it goes through different driver entry points than
@@ -215,6 +232,7 @@ public partial class MainWindow : Window
             {
                 TryPopulateClockFontCombo();
                 try { UpdateVersionInfo(); } catch { }
+                try { UpdateFirstRunBanner(); } catch { }
             }
         }
         catch { }
@@ -369,6 +387,32 @@ public partial class MainWindow : Window
     private void OnRebuildQueueClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _ = BuildPlaylistAsync();
+    }
+
+    private async void OnScanLibraryClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        // Same effect as Rebuild Queue but explicit about what it does and
+        // wired to the first-run banner so the banner hides only after the
+        // scan actually completes.
+        try
+        {
+            await BuildPlaylistAsync();
+            _needsInitialScan = false;
+            UpdateFirstRunBanner();
+            try { ToggleOverlay(false); } catch { }
+            try { TryStartPlayback(); } catch { }
+        }
+        catch { }
+    }
+
+    private void UpdateFirstRunBanner()
+    {
+        try
+        {
+            var banner = this.FindControl<Border>("FirstRunBanner");
+            if (banner != null) banner.IsVisible = _needsInitialScan;
+        }
+        catch { }
     }
 
     private async void OnApplyRemoteUrlClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1690,6 +1734,19 @@ public partial class MainWindow : Window
             "Pinscreen2");
         Directory.CreateDirectory(dir);
         return Path.Combine(dir, "playlist.cache.json");
+    }
+
+    // True when a usable playlist cache exists for the given folder set --
+    // used at startup to decide whether to load instantly or prompt the user
+    // to kick off the first scan.
+    private static bool HasPlaylistCache(List<string> currentFolders)
+    {
+        try
+        {
+            var loaded = TryLoadPlaylistCache(currentFolders);
+            return loaded != null && loaded.Count > 0;
+        }
+        catch { return false; }
     }
 
     // Loaded cache is returned as (path, size) pairs so the playlist build does
