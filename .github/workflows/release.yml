@@ -51,8 +51,7 @@ jobs:
           -c Release
           -r ${{ matrix.runtime }}
           --self-contained true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:PublishSingleFile=false
           -p:PublishTrimmed=false
           -p:Version=${{ steps.ver.outputs.version }}
           -p:AssemblyVersion=${{ steps.ver.outputs.version }}

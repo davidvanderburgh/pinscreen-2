@@ -1625,77 +1625,77 @@ public partial class MainWindow : Window
             }
         }
 
-        // Randomize order each build
-        var rng = new Random();
-        IEnumerable<string> finalOrder = collected.Select(it => it.Path);
+        // Build the final order. Replaces the previous deterministic
+        // round-robin (which produced a noticeable "always the same pattern"
+        // even when individual items shuffled) with a constrained random
+        // shuffle: pick the next item uniformly at random from items whose
+        // group key isn't among the last RecentWindow picks. Falls back to
+        // any random item when constraints can't be satisfied. Result is
+        // genuinely different every run while still spreading same-game and
+        // same-format items out.
+        var rng = Random.Shared;
+        IEnumerable<string> finalOrder;
         if (_config.BalanceQueueByGame)
         {
-            // Two-level interleave: outer loop rotates SIZE BUCKETS so adjacent
-            // items have different visual formats (tiny DMD vs full LCD), inner
-            // loop rotates GAMES within each bucket so adjacent same-bucket
-            // items are different games.
-            //
-            // Each (game, bucket) is a queue, shuffled. Per bucket, a
-            // game-round-robin sequence is built. Then we round-robin across
-            // those bucket sequences.
-
-            var perKey = collected
-                .GroupBy(it => GetGroupKey(it.Path, it.Size)) // "<game>|<bucket>"
-                .ToDictionary(
-                    g => g.Key,
-                    g => new Queue<string>(g.Select(it => it.Path).OrderBy(_ => rng.Next())));
-
-            // bucket -> ordered list of game-keys for round-robin
-            var bucketToKeys = perKey.Keys
-                .GroupBy(k => k.Substring(k.LastIndexOf('|') + 1))
-                .ToDictionary(
-                    g => g.Key,
-                    g => g.OrderBy(_ => rng.Next()).ToList());
-
-            // Build a game-interleaved sequence for each bucket.
-            var bucketQueues = bucketToKeys
-                .OrderBy(_ => rng.Next())
-                .Select(kv =>
-                {
-                    var seq = new List<string>();
-                    bool any;
-                    do
-                    {
-                        any = false;
-                        foreach (var key in kv.Value)
-                        {
-                            if (perKey[key].Count > 0)
-                            {
-                                seq.Add(perKey[key].Dequeue());
-                                any = true;
-                            }
-                        }
-                    } while (any);
-                    return new Queue<string>(seq);
-                })
+            const int RecentWindow = 5;
+            var pool = collected
+                .Select(it => (it.Path, Key: GetGroupKey(it.Path, it.Size)))
                 .ToList();
-
-            // Outer round-robin across buckets so adjacent items differ in size class.
-            var interleaved = new List<string>();
-            bool moreOuter;
-            do
+            // Fisher-Yates shuffle so initial scan order doesn't bias selection.
+            for (int i = pool.Count - 1; i > 0; i--)
             {
-                moreOuter = false;
-                foreach (var bq in bucketQueues)
+                int j = rng.Next(i + 1);
+                (pool[i], pool[j]) = (pool[j], pool[i]);
+            }
+
+            var output = new List<string>(pool.Count);
+            var recent = new Queue<string>();
+            while (pool.Count > 0)
+            {
+                int pickIdx = -1;
+                // First pass: random search for a non-conflicting item.
+                int attempts = Math.Min(pool.Count, 32);
+                for (int t = 0; t < attempts; t++)
                 {
-                    if (bq.Count > 0)
+                    int candidate = rng.Next(pool.Count);
+                    if (!recent.Contains(pool[candidate].Key))
                     {
-                        interleaved.Add(bq.Dequeue());
-                        moreOuter = true;
+                        pickIdx = candidate;
+                        break;
                     }
                 }
-            } while (moreOuter);
+                // Fallback: linear scan for any non-conflicting item.
+                if (pickIdx < 0)
+                {
+                    for (int i = 0; i < pool.Count; i++)
+                    {
+                        if (!recent.Contains(pool[i].Key)) { pickIdx = i; break; }
+                    }
+                }
+                // Last resort: pool entirely from recent groups; just pick one.
+                if (pickIdx < 0) pickIdx = rng.Next(pool.Count);
 
-            finalOrder = interleaved;
+                var picked = pool[pickIdx];
+                // Swap-remove for O(1).
+                pool[pickIdx] = pool[pool.Count - 1];
+                pool.RemoveAt(pool.Count - 1);
+
+                output.Add(picked.Path);
+                recent.Enqueue(picked.Key);
+                if (recent.Count > RecentWindow) recent.Dequeue();
+            }
+            finalOrder = output;
         }
         else
         {
-            finalOrder = collected.Select(it => it.Path).OrderBy(_ => rng.Next()).ToList();
+            // Plain Fisher-Yates uniform shuffle.
+            var arr = collected.Select(it => it.Path).ToArray();
+            for (int i = arr.Length - 1; i > 0; i--)
+            {
+                int j = rng.Next(i + 1);
+                (arr[i], arr[j]) = (arr[j], arr[i]);
+            }
+            finalOrder = arr;
         }
 
         _playlist.Clear();

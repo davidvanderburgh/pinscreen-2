@@ -53,10 +53,14 @@ if (-not (Test-Path $IconPath)) {
 
 if (-not $SkipPublish) {
     Write-Host "Publishing Pinscreen2.App for win-x64..." -ForegroundColor Cyan
+    # Multi-file publish (NOT single-file). Single-file wraps the runtime
+    # and native libs into the EXE, which then self-extracts to
+    # %LOCALAPPDATA%\Microsoft\.NET on first run -- a big chunk of slow
+    # disk + AV scan time. The installer ships every file individually
+    # into Program Files, so the first launch needs zero extract.
     & dotnet publish (Join-Path $ProjectDir "Pinscreen2.App\Pinscreen2.App.csproj") `
         -c Release -r win-x64 --self-contained true `
-        -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-        -p:PublishTrimmed=false `
+        -p:PublishSingleFile=false -p:PublishTrimmed=false `
         -p:Version=$Version -p:AssemblyVersion=$Version -p:FileVersion=$Version -p:InformationalVersion=$Version
     if ($LASTEXITCODE -ne 0) { Write-Error "App publish failed."; exit 1 }
 }
