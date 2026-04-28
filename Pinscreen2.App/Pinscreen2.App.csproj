@@ -21,6 +21,10 @@
     </PackageReference>
     <PackageReference Include="LibVLCSharp" Version="3.9.4" />
     <PackageReference Include="LibVLCSharp.Avalonia" Version="3.9.4" />
+    <!-- Bundle libvlc + plugins so we are not at the mercy of the user's
+         system VLC install (which may have been minimized and lacks the
+         wingdi vout plugin we need to bypass broken Intel drivers). -->
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.20" />
   </ItemGroup>
 
   <ItemGroup>
@@ -32,4 +36,17 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <!-- VideoLAN.LibVLC.Windows ships under build/x64 (and build/x86) instead of
+       the standard runtimes/ layout, so dotnet build/publish doesn't auto-copy
+       the libvlc DLLs and plugins. Wire it up manually. -->
+  <ItemGroup>
+    <_LibVlcWindowsFiles Include="$(NuGetPackageRoot)videolan.libvlc.windows\3.0.20\build\x64\**\*" />
+  </ItemGroup>
+  <Target Name="CopyLibVlcWindows" AfterTargets="Build" Condition="$([MSBuild]::IsOSPlatform('Windows')) and Exists('$(NuGetPackageRoot)videolan.libvlc.windows\3.0.20\build\x64')">
+    <Copy SourceFiles="@(_LibVlcWindowsFiles)" DestinationFiles="@(_LibVlcWindowsFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CopyLibVlcWindowsToPublish" AfterTargets="Publish" Condition="$([MSBuild]::IsOSPlatform('Windows')) and Exists('$(NuGetPackageRoot)videolan.libvlc.windows\3.0.20\build\x64')">
+    <Copy SourceFiles="@(_LibVlcWindowsFiles)" DestinationFiles="@(_LibVlcWindowsFiles->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

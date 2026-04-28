@@ -150,7 +150,19 @@ public partial class MainWindow : Window
         // graphics driver and want hardware-accelerated rendering back.
         try
         {
-            var vlcArgs = new System.Collections.Generic.List<string> { "--avcodec-hw=none", "--no-video-title-show", "--quiet" };
+            var vlcArgs = new System.Collections.Generic.List<string>
+            {
+                "--avcodec-hw=none",          // no hardware decode
+                "--no-video-title-show",
+                "--quiet",
+            };
+            if (OperatingSystem.IsWindows())
+            {
+                // Belt-and-suspenders: even if a D3D vout sneaks in (because
+                // wingdi plugin is missing or config overrides), turn off the
+                // hardware-acceleration paths inside it.
+                vlcArgs.Add("--no-direct3d11-hw-blending");
+            }
             if (!string.IsNullOrWhiteSpace(_config.VlcVideoOutput))
                 vlcArgs.Add($"--vout={_config.VlcVideoOutput}");
             else if (OperatingSystem.IsWindows())
@@ -1148,6 +1160,22 @@ public partial class MainWindow : Window
                     }
                 }
             }
+
+            // Prefer libvlc bundled with the app (VideoLAN.LibVLC.Windows
+            // NuGet drops libvlc.dll + the plugins folder into the publish
+            // dir on win-x64). Using the bundled copy guarantees the wingdi
+            // vout plugin is present, so the broken-Intel-driver workaround
+            // ("--vout=wingdi") actually takes effect.
+            try
+            {
+                var baseDir = AppContext.BaseDirectory;
+                var bundledLibName =
+                    RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "libvlc.dll" :
+                    RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "libvlc.dylib" : "libvlc.so";
+                if (File.Exists(Path.Combine(baseDir, bundledLibName)))
+                    return baseDir;
+            }
+            catch { }
 
             // OS defaults
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
