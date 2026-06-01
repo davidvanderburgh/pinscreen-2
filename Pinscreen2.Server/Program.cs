@@ -45,7 +45,15 @@ var app = builder.Build();
 
 string[] videoExts = { ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm" };
 
-app.MapGet("/manifest.json", () =>
+// Cache the manifest in memory. Walking 30k+ files takes ~5 seconds per
+// request -- that's a long window for a flaky Tailscale DERP-relayed link
+// to time out, plus it pegs the CPU on every sync attempt. Build once,
+// serve from cache, refresh on a timer in the background.
+var manifestLock = new object();
+byte[]? manifestBytes = null;
+DateTimeOffset manifestBuiltAt = DateTimeOffset.MinValue;
+
+byte[] BuildManifest()
 {
     var items = new List<ManifestItem>();
     var stack = new Stack<string>();
@@ -72,8 +80,44 @@ app.MapGet("/manifest.json", () =>
         }
         catch { }
     }
-    return Results.Json(new Manifest(items));
+    return JsonSerializer.SerializeToUtf8Bytes(new Manifest(items));
+}
+
+void RefreshManifest()
+{
+    try
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var bytes = BuildManifest();
+        sw.Stop();
+        lock (manifestLock)
+        {
+            manifestBytes = bytes;
+            manifestBuiltAt = DateTimeOffset.UtcNow;
+        }
+        Console.WriteLine($"Manifest refreshed: {bytes.Length} bytes in {sw.ElapsedMilliseconds} ms");
+    }
+    catch (Exception ex) { Console.Error.WriteLine($"Manifest refresh failed: {ex.Message}"); }
+}
+
+// Build once at startup so the first sync request is instant.
+RefreshManifest();
+// Refresh every 5 minutes in the background; new videos appear after the
+// next refresh tick. POST /manifest/refresh forces an immediate rebuild.
+var refreshTimer = new System.Threading.Timer(_ => RefreshManifest(), null,
+    TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+
+app.MapGet("/manifest.json", (HttpContext ctx) =>
+{
+    byte[]? bytes;
+    DateTimeOffset builtAt;
+    lock (manifestLock) { bytes = manifestBytes; builtAt = manifestBuiltAt; }
+    if (bytes == null) return Results.StatusCode(503);
+    ctx.Response.Headers["X-Manifest-Built-At"] = builtAt.ToString("O");
+    return Results.Bytes(bytes, "application/json");
 });
+
+app.MapPost("/manifest/refresh", () => { RefreshManifest(); return Results.Ok(new { built = manifestBuiltAt }); });
 
 var contentTypes = new FileExtensionContentTypeProvider();
 app.MapGet("/file/{**path}", (string path, HttpContext ctx) =>
