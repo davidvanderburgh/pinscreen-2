@@ -78,27 +78,104 @@ Instead of scanning local folders, the app can pull videos from a `Pinscreen2.Se
 
 ### Run the server
 
-The server (`Pinscreen2.Server`) exposes a manifest + file endpoints over HTTP.
+The server (`Pinscreen2.Server`) exposes the manifest, file downloads, a push
+channel for connected screens, and a management dashboard.
 
-1. Publish it to a stable location on the source machine:
-   ```powershell
-   dotnet publish Pinscreen2.Server -c Release -r win-x64 --self-contained false -o D:\Pinball\Pinscreen2Server
-   ```
-2. Drop a `server-config.json` next to the exe:
-   ```json
-   { "Root": "D:\\Pinball\\videos", "Port": 8088 }
-   ```
-3. Allow the port through Windows Firewall (one-time, admin PowerShell):
-   ```powershell
-   New-NetFirewallRule -DisplayName "Pinscreen2 Server" -Direction Inbound -Protocol TCP -LocalPort 8088 -Action Allow -Profile Private,Domain
-   ```
-4. Optional auto-start on login: place a shortcut in the user's Startup folder pointing at a hidden launcher (`wscript.exe start-hidden.vbs`) so the server runs without a console window.
+Install (publishes a self-contained single-file exe to
+`%LOCALAPPDATA%\Pinscreen2.Server`, writes `server-config.json`, installs the
+watchdog launcher and Startup shortcut, and opens the firewall port):
 
-Sanity check from another machine: `http://<hostname>:8088/manifest.json` should return a JSON list of every video.
+```powershell
+./scripts/install-server.ps1
+```
+
+`server-config.json` next to the exe drives everything:
+
+```json
+{
+  "Root": "D:\\Pinball\\videos",
+  "Port": 8088,
+  "AutoPushOnChange": true,
+  "RefreshMinutes": 5
+}
+```
+
+- `AutoPushOnChange` — when a rescan finds the library changed, tell every
+  connected screen to sync. This is what makes curating on the server enough.
+- `RefreshMinutes` — how often to rescan `Root`.
+
+Sanity check from another machine: `http://<hostname>:8088/manifest.json` returns
+a JSON list of every video, and `http://<hostname>:8088/` is the dashboard.
+
+#### Keeping it running
+
+The server previously ran from a plain Startup shortcut that launched it exactly
+once at login. It died on 2026-06-01 and stayed down for two months — nothing
+restarted it and nothing reported it. Two supervision options now exist:
+
+| | Watchdog (default) | Scheduled task (`-AsService`) |
+|---|---|---|
+| Elevation to install | no | yes |
+| Restarts on crash | yes, within ~10s | yes, within 5 min |
+| Runs before login | no | yes |
+| Survives logout | no | yes |
+
+```powershell
+./scripts/install-server.ps1              # watchdog
+./scripts/install-server.ps1 -AsService   # SYSTEM task, from an elevated shell
+```
+
+The watchdog is `scripts/start-server.vbs`: a hidden `wscript` loop that
+relaunches the exe whenever it exits. The server writes its own rolling
+`server.log` (5 MB, one prior generation kept) next to the exe.
+
+### Management dashboard
+
+Browse to `http://<hostname>:8088/` on any machine that can reach the server.
+
+- **Library** — every game folder with video counts and sizes; click a row to
+  list its files. **Rescan now** rebuilds the manifest immediately instead of
+  waiting for the timer.
+- **Pinscreens** — every screen that has ever connected, with online state,
+  cached video count, free disk space, app version, live sync progress, and when
+  it last finished a sync. **Sync** pushes to one screen; **Push sync to all**
+  pushes to every connected screen. Offline screens can be forgotten.
+
+Device records persist in `devices.json` next to the exe, so a powered-off
+screen still appears in the list.
+
+### How screens receive updates
+
+Each screen holds a Server-Sent Events connection to `/events`. The server
+pushes a `sync` command down it and the screen syncs on its own — nobody has to
+touch a pinscreen. The connection reconnects forever with backoff, so a screen
+that was asleep, offline, or behind a dropped Tailscale relay picks straight up
+when it comes back.
+
+A sync is pushed when:
+
+- you press **Sync** or **Push sync to all** on the dashboard,
+- a timed rescan finds the library changed (with `AutoPushOnChange`),
+- you press **Rescan now** and it finds changes.
+
+There is no authentication on any endpoint — the same as the file endpoints have
+always been. Keep it on your LAN or Tailscale, not the open internet.
 
 ### Configure the client
 
-In the app overlay, set **Remote library URL** to `http://<hostname>:8088`, hit **Apply**, then **Sync Now**. Sync diffs the manifest against the local cache, checks free disk space (with 1 GB headroom), and downloads anything missing — files that won't fit are skipped and reported. Future syncs only pull new files.
+In the app overlay, set **Remote library URL** to `http://<hostname>:8088`, hit
+**Apply**, then **Sync Now**. Sync diffs the manifest against the local cache,
+checks free disk space (with 1 GB headroom), and downloads anything missing —
+files that won't fit are skipped and reported. Future syncs only pull new files.
+
+Applying the URL also registers the screen with the server, after which pushed
+syncs work with no further setup. Relevant config keys:
+
+- `DeviceName` — name shown on the dashboard. Defaults to the machine name.
+- `DeviceId` — stable id, generated once so the dashboard tracks the screen
+  across restarts. Don't copy it between machines.
+- `AutoSyncOnPush` — set false to register and report status but ignore pushed
+  syncs.
 
 The cache directory defaults to `%LOCALAPPDATA%/Pinscreen2/cache` on Windows (and the equivalent on macOS/Linux); override via `RemoteCacheDir` in config.
 

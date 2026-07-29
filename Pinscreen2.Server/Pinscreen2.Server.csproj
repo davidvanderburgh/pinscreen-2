@@ -7,4 +7,8 @@
     <RootNamespace>Pinscreen2.Server</RootNamespace>
     <AssemblyName>Pinscreen2.Server</AssemblyName>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Embedded so a self-contained single-file publish stays one file. -->
+    <EmbeddedResource Include="index.html" LogicalName="Pinscreen2.Server.index.html" />
+  </ItemGroup>
 </Project>

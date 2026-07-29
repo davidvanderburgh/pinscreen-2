@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pinscreen Library</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171c23; --panel2: #1e252e; --line: #2a323d;
+    --fg: #e6edf3; --dim: #8b98a5; --accent: #4aa3ff; --ok: #3fb950;
+    --warn: #d29922; --err: #f85149; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 20px 24px; border-bottom: 1px solid var(--line);
+           display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .root { color: var(--dim); font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; display: grid; gap: 24px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .sec-head { padding: 14px 18px; border-bottom: 1px solid var(--line);
+              display: flex; align-items: center; gap: 12px; }
+  .sec-head h2 { font-size: 14px; margin: 0; font-weight: 600; text-transform: uppercase;
+                 letter-spacing: .6px; color: var(--dim); }
+  .spacer { flex: 1; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px;
+           background: var(--line); }
+  .stat { background: var(--panel); padding: 14px 18px; }
+  .stat .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+  .stat .v { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+           padding: 7px 13px; border-radius: 7px; cursor: pointer; font-size: 13px; font-family: inherit; }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
+  button.primary:hover:not(:disabled) { filter: brightness(1.1); color: #04121f; }
+  button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+  .devices { display: grid; gap: 1px; background: var(--line); }
+  .dev { background: var(--panel); padding: 14px 18px; display: grid;
+         grid-template-columns: 12px 1fr auto; gap: 14px; align-items: center; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dim); }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(63,185,80,.15); }
+  .dot.syncing { background: var(--accent); box-shadow: 0 0 0 3px rgba(74,163,255,.15); }
+  .dot.err { background: var(--err); box-shadow: 0 0 0 3px rgba(248,81,73,.15); }
+  .dev .name { font-weight: 600; }
+  .dev .meta { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .dev .acts { display: flex; gap: 8px; }
+  .bar { height: 4px; background: var(--panel2); border-radius: 2px; margin-top: 7px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 18px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--panel2); }
+  tr.files td { background: var(--bg); padding: 0 18px 12px 18px; cursor: default; }
+  tr.files:hover td { background: var(--bg); }
+  .filelist { max-height: 300px; overflow: auto; font-family: ui-monospace, Consolas, monospace;
+              font-size: 12px; color: var(--dim); padding-top: 8px; }
+  .filelist div { padding: 1px 0; }
+  input[type=search] { background: var(--bg); border: 1px solid var(--line); color: var(--fg);
+                       padding: 7px 11px; border-radius: 7px; font: inherit; font-size: 13px; width: 220px; }
+  .empty { padding: 28px 18px; color: var(--dim); text-align: center; }
+  #toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+           background: var(--panel2); border: 1px solid var(--line); padding: 10px 18px;
+           border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pinscreen Library</h1>
+  <span class="root" id="root"></span>
+  <span class="spacer"></span>
+  <span class="root" id="built"></span>
+</header>
+
+<main>
+  <section>
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>Pinscreens</h2>
+      <span class="spacer"></span>
+      <button id="syncAll" class="primary">Push sync to all</button>
+    </div>
+    <div class="devices" id="devices"></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>Library</h2>
+      <span class="spacer"></span>
+      <input type="search" id="filter" placeholder="Filter games…">
+      <button id="rescan">Rescan now</button>
+    </div>
+    <table>
+      <thead><tr><th>Game</th><th class="num">Videos</th><th class="num">Size</th></tr></thead>
+      <tbody id="games"></tbody>
+    </table>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+
+function bytes(n) {
+  const u = ['B','KB','MB','GB','TB']; let i = 0; n = Number(n) || 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i === 0 ? 0 : n < 10 ? 2 : 1) + ' ' + u[i];
+}
+function ago(iso) {
+  if (!iso) return 'never';
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return Math.max(0, Math.round(s)) + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+let toastTimer;
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+}
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { const j = await r.json(); if (j && j.error) detail = j.error; } catch {}
+    throw new Error(detail);
+  }
+  return r.status === 204 ? null : r.json().catch(() => null);
+}
+
+async function loadStats() {
+  const s = await api('/api/stats');
+  $('#root').textContent = s.root;
+  $('#built').textContent = (s.ready ? 'Library scanned ' + ago(s.builtAt) : 'Scanning library…') +
+    (s.autoPushOnChange ? ' · auto-push on' : ' · auto-push off');
+  $('#stats').innerHTML = [
+    ['Games', s.games], ['Videos', s.files.toLocaleString()],
+    ['Total size', bytes(s.bytes)], ['Screens online', s.devicesOnline],
+  ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+}
+
+async function loadDevices() {
+  const list = await api('/api/devices');
+  const el = $('#devices');
+  if (!list.length) {
+    el.innerHTML = '<div class="empty">No pinscreens have connected yet.<br>' +
+      'Set the remote library URL on a screen and it will register automatically.</div>';
+    return;
+  }
+  el.innerHTML = list.map(d => {
+    const cls = !d.online ? '' : d.syncState === 'syncing' ? 'syncing' : d.syncState === 'error' ? 'err' : 'on';
+    const pct = d.syncFilesTotal > 0 ? Math.round(100 * d.syncFilesDone / d.syncFilesTotal) : 0;
+    const meta = d.online
+      ? `${d.cachedFiles.toLocaleString()} videos cached · ${bytes(d.cachedBytes)} · ${bytes(d.freeBytes)} free` +
+        (d.version ? ` · v${d.version}` : '') + (d.address ? ` · ${d.address}` : '')
+      : `offline · last seen ${ago(d.lastSeen)}` + (d.cachedFiles ? ` · ${d.cachedFiles.toLocaleString()} videos cached` : '');
+    return `<div class="dev">
+      <span class="dot ${cls}"></span>
+      <div>
+        <div class="name">${esc(d.name || d.id)}</div>
+        <div class="meta">${esc(meta)}</div>
+        ${d.syncState === 'syncing'
+          ? `<div class="meta">${esc(d.syncMessage || 'Syncing…')}</div><div class="bar"><i style="width:${pct}%"></i></div>`
+          : d.syncState === 'error'
+            ? `<div class="meta" style="color:var(--err)">${esc(d.syncMessage || 'Sync failed')}</div>`
+            : d.lastSyncAt ? `<div class="meta">last sync ${ago(d.lastSyncAt)}</div>` : ''}
+      </div>
+      <div class="acts">
+        <button data-sync="${esc(d.id)}" ${d.online ? '' : 'disabled'}>Sync</button>
+        <button class="danger" data-forget="${esc(d.id)}" ${d.online ? 'disabled' : ''}>Forget</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+let allGames = [];
+async function loadGames() {
+  allGames = await api('/api/library');
+  renderGames();
+}
+function renderGames() {
+  const q = $('#filter').value.trim().toLowerCase();
+  const rows = allGames.filter(g => !q || g.name.toLowerCase().includes(q));
+  $('#games').innerHTML = rows.length
+    ? rows.map(g => `<tr data-game="${esc(g.name)}"><td>${esc(g.name)}</td>` +
+        `<td class="num">${g.files.toLocaleString()}</td><td class="num">${bytes(g.bytes)}</td></tr>`).join('')
+    : '<tr><td colspan="3" class="empty">No games match.</td></tr>';
+}
+
+// Expand a game row to list its files.
+$('#games').addEventListener('click', async e => {
+  const tr = e.target.closest('tr[data-game]');
+  if (!tr) return;
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains('files')) { next.remove(); return; }
+  document.querySelectorAll('tr.files').forEach(r => r.remove());
+  const game = tr.dataset.game;
+  const row = document.createElement('tr');
+  row.className = 'files';
+  row.innerHTML = '<td colspan="3"><div class="filelist">Loading…</div></td>';
+  tr.after(row);
+  try {
+    const files = await api('/api/library/' + encodeURIComponent(game));
+    row.querySelector('.filelist').innerHTML = files
+      .map(f => `<div>${esc(f.path.split('/').pop())} <span style="opacity:.6">${bytes(f.size)}</span></div>`)
+      .join('');
+  } catch (err) { row.querySelector('.filelist').textContent = 'Failed: ' + err.message; }
+});
+
+$('#filter').addEventListener('input', renderGames);
+
+$('#devices').addEventListener('click', async e => {
+  const sync = e.target.closest('[data-sync]');
+  const forget = e.target.closest('[data-forget]');
+  try {
+    if (sync) {
+      e.target.disabled = true;
+      await api('/api/devices/' + encodeURIComponent(sync.dataset.sync) + '/sync', { method: 'POST' });
+      toast('Sync pushed.');
+    } else if (forget) {
+      if (!confirm('Forget this screen? It will reappear if it reconnects.')) return;
+      await api('/api/devices/' + encodeURIComponent(forget.dataset.forget), { method: 'DELETE' });
+      toast('Device forgotten.');
+    } else return;
+  } catch (err) { toast('Failed: ' + err.message); }
+  refresh();
+});
+
+$('#syncAll').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/devices/sync-all', { method: 'POST' });
+    toast(r.sent ? `Sync pushed to ${r.sent} screen${r.sent === 1 ? '' : 's'}.` : 'No screens are online.');
+  } catch (err) { toast('Failed: ' + err.message); }
+  refresh();
+});
+
+$('#rescan').addEventListener('click', async () => {
+  const b = $('#rescan'); b.disabled = true; b.textContent = 'Scanning…';
+  try {
+    const r = await api('/api/manifest/refresh', { method: 'POST' });
+    toast(r.changed ? `Library changed — ${r.files.toLocaleString()} videos.` : 'No changes.');
+    await Promise.all([loadStats(), loadGames()]);
+  } catch (err) { toast('Failed: ' + err.message); }
+  b.disabled = false; b.textContent = 'Rescan now';
+});
+
+async function refresh() {
+  try { await Promise.all([loadStats(), loadDevices()]); } catch (err) { /* transient */ }
+}
+
+refresh();
+loadGames();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

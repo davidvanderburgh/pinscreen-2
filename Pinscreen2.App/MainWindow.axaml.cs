@@ -45,6 +45,13 @@ public partial class MainWindow : Window
     private bool _isInitializingUi = true;
     private bool _needsInitialScan = false;
     private string _effectiveConfigPath = string.Empty;
+    private DeviceAgent? _agent;
+    private DispatcherTimer? _statusTimer;
+    private string _syncTargetFolder = string.Empty;
+    // Library totals from the last playlist build, so the status heartbeat
+    // doesn't have to re-stat 30k files every 30 seconds.
+    private int _libraryFileCount;
+    private long _libraryBytes;
     private const string GitHubUpdateRepo = "davidvanderburgh/pinscreen-2"; // permanently linked repo
     // Expose config for overlay window
     public AppConfig Config => _config;
@@ -136,6 +143,10 @@ public partial class MainWindow : Window
                 try { UpdateStatus(); } catch { }
             }, DispatcherPriority.Background);
         }
+
+        // Open the push channel so the library server can drive syncs. Failures
+        // are retried forever in the background and never block startup.
+        try { EnsureDeviceAgent(); } catch (Exception ex) { Console.WriteLine($"Device agent start failed: {ex.Message}"); }
 
         // Initialize LibVLC. On Windows we default to the wingdi video output
         // module -- pure GDI software rendering with no D3D / DXVA calls. The
@@ -439,6 +450,8 @@ public partial class MainWindow : Window
             _config.RemoteLibraryUrl = url;
             _remoteClient = null;
             SaveConfig();
+            StopDeviceAgent();
+            EnsureDeviceAgent();
             await BuildPlaylistAsync();
             PlayNext();
         }
@@ -455,6 +468,7 @@ public partial class MainWindow : Window
             _remoteClient = null;
             _remoteStatus = string.Empty;
             SaveConfig();
+            StopDeviceAgent();
             await BuildPlaylistAsync();
             PlayNext();
         }
@@ -463,29 +477,45 @@ public partial class MainWindow : Window
 
     private async void OnSyncNowClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (_isSyncing) return;
         if (string.IsNullOrWhiteSpace(_config.RemoteLibraryUrl))
         {
             await ShowMessageAsync("Set a Remote library URL first, then press Sync.");
             return;
         }
+        await RunSyncAsync(interactive: true);
+    }
+
+    /// <summary>
+    /// Shared by the Sync Now button and server-pushed sync commands. Interactive
+    /// syncs show the HUD and report problems in a dialog; pushed syncs run
+    /// silently -- an unattended screen must never end up parked behind a modal.
+    /// Must be called on the UI thread.
+    /// </summary>
+    private async Task RunSyncAsync(bool interactive)
+    {
+        if (_isSyncing) return;
+        if (string.IsNullOrWhiteSpace(_config.RemoteLibraryUrl)) return;
+
         _isSyncing = true;
-        ShowSyncHud(true);
+        if (interactive) ShowSyncHud(true);
         try
         {
             EnsureRemoteClient();
             var progress = new Progress<SyncProgress>(p =>
             {
                 _remoteStatus = p.Message ?? string.Empty;
-                UpdateSyncHud(p);
+                if (interactive) UpdateSyncHud(p);
                 UpdateStatus();
+                ReportAgentStatus("syncing", p.Message ?? string.Empty, p.FilesDownloaded, p.FilesTotal);
             });
             var result = await _remoteClient!.SyncAsync(progress);
             await BuildPlaylistAsync();
             if (_mediaPlayer != null && !_mediaPlayer.IsPlaying)
                 PlayNext();
 
-            if (result.FilesSkipped > 0)
+            ReportAgentStatus("idle", result.Message ?? string.Empty, result.FilesDownloaded, result.FilesTotal);
+
+            if (interactive && result.FilesSkipped > 0)
             {
                 var shortBy = Math.Max(0, result.BytesNeeded - Math.Max(0, result.FreeBytes));
                 await ShowMessageAsync(
@@ -499,12 +529,14 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            await ShowMessageAsync($"Sync failed: {ex.Message}");
+            ReportAgentStatus("error", ex.Message, 0, 0);
+            if (interactive) await ShowMessageAsync($"Sync failed: {ex.Message}");
+            else Console.WriteLine($"Pushed sync failed: {ex.Message}");
         }
         finally
         {
             _isSyncing = false;
-            ShowSyncHud(false);
+            if (interactive) ShowSyncHud(false);
         }
     }
 
@@ -1653,6 +1685,9 @@ public partial class MainWindow : Window
             }
         }
 
+        _libraryFileCount = collected.Count;
+        _libraryBytes = collected.Sum(c => c.Size);
+
         // Build the final order. Replaces the previous deterministic
         // round-robin (which produced a noticeable "always the same pattern"
         // even when individual items shuffled) with a constrained random
@@ -1933,8 +1968,104 @@ public partial class MainWindow : Window
             : ResolveFolderPath(first!);
         if (string.IsNullOrWhiteSpace(resolved))
             resolved = RemoteLibraryClient.DefaultCacheDir();
+        _syncTargetFolder = resolved!;
         _remoteClient = new RemoteLibraryClient(_config.RemoteLibraryUrl, resolved);
     }
+
+    /// <summary>
+    /// Brings up the push channel to the library server. Idempotent -- call it
+    /// after anything that changes the remote URL.
+    /// </summary>
+    private void EnsureDeviceAgent()
+    {
+        var url = (_config.RemoteLibraryUrl ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(url)) { StopDeviceAgent(); return; }
+        if (_agent != null) return;
+
+        // A stable per-screen id so the dashboard tracks the same device across
+        // restarts and IP changes.
+        if (string.IsNullOrWhiteSpace(_config.DeviceId))
+        {
+            _config.DeviceId = Guid.NewGuid().ToString("n");
+            SaveConfig();
+        }
+        var name = string.IsNullOrWhiteSpace(_config.DeviceName) ? Environment.MachineName : _config.DeviceName;
+
+        if (string.IsNullOrWhiteSpace(_syncTargetFolder))
+        {
+            var first = _config.MediaFolders.FirstOrDefault();
+            _syncTargetFolder = (string.IsNullOrWhiteSpace(first) ? null : ResolveFolderPath(first!))
+                                ?? RemoteLibraryClient.DefaultCacheDir();
+        }
+
+        _agent = new DeviceAgent(url, _config.DeviceId, name, GetAppVersionString());
+        _agent.StatusProvider = BuildStatusReport;
+        _agent.SyncRequested = () =>
+        {
+            // The agent raises this from a background read loop; RunSyncAsync
+            // touches the player and HUD, so hop to the UI thread.
+            var tcs = new TaskCompletionSource();
+            Dispatcher.UIThread.Post(async () =>
+            {
+                try
+                {
+                    if (_config.AutoSyncOnPush) await RunSyncAsync(interactive: false);
+                    else Console.WriteLine("DeviceAgent: sync pushed, but AutoSyncOnPush is off");
+                    tcs.TrySetResult();
+                }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            });
+            return tcs.Task;
+        };
+        _agent.Start();
+
+        if (_statusTimer == null)
+        {
+            _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+            _statusTimer.Tick += (_, __) =>
+            {
+                // While syncing, progress callbacks already report far more often.
+                if (_isSyncing) return;
+                _ = _agent?.ReportAsync(null);
+            };
+        }
+        _statusTimer.Start();
+    }
+
+    private void StopDeviceAgent()
+    {
+        try { _statusTimer?.Stop(); } catch { }
+        try { _agent?.Dispose(); } catch { }
+        _agent = null;
+    }
+
+    private DeviceStatusReport BuildStatusReport() => new DeviceStatusReport
+    {
+        Name = string.IsNullOrWhiteSpace(_config.DeviceName) ? Environment.MachineName : _config.DeviceName,
+        Version = GetAppVersionString(),
+        CachedFiles = _libraryFileCount,
+        CachedBytes = _libraryBytes,
+        FreeBytes = string.IsNullOrWhiteSpace(_syncTargetFolder)
+            ? 0
+            : RemoteLibraryClient.GetFreeBytes(_syncTargetFolder),
+        SyncState = _isSyncing ? "syncing" : "idle",
+        SyncMessage = _remoteStatus,
+    };
+
+    private void ReportAgentStatus(string state, string message, int done, int total)
+    {
+        var agent = _agent;
+        if (agent == null) return;
+        var report = BuildStatusReport();
+        report.SyncState = state;
+        report.SyncMessage = message;
+        report.SyncFilesDone = done;
+        report.SyncFilesTotal = total;
+        _ = agent.ReportAsync(report);
+    }
+
+    // Dashboard renders this with its own "v" prefix, so hand it the bare number.
+    private static string GetAppVersionString() => FormatVersion(GetLocalVersion()).TrimStart('v');
 
     private static bool HasVideoExtension(string path)
     {
@@ -2038,6 +2169,12 @@ public class AppConfig
     public int DelaySeconds { get; set; } = 3;
     public double ClockFontSize { get; set; } = 72.0;
     public string RemoteLibraryUrl { get; set; } = string.Empty;
+    /// <summary>Stable id so the server dashboard tracks this screen across restarts. Auto-generated once.</summary>
+    public string DeviceId { get; set; } = string.Empty;
+    /// <summary>Friendly name shown on the dashboard. Defaults to the machine name.</summary>
+    public string DeviceName { get; set; } = string.Empty;
+    /// <summary>Sync automatically when the server pushes a sync command.</summary>
+    public bool AutoSyncOnPush { get; set; } = true;
     // LibVLC video output module override. Empty = platform default
     // ("direct3d9" on Windows; let VLC pick elsewhere). Set to e.g.
     // "direct3d11", "wingdi", or "gl" to work around driver-specific crashes.
