@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Text;
@@ -7,6 +8,9 @@ using System.Threading;
 using System.Threading.Tasks;
 
 namespace Pinscreen2.App;
+
+/// <summary>One game's outstanding work, for the dashboard's incoming list.</summary>
+public record PendingGameDto(string Name, int Files, long Bytes);
 
 /// <summary>Snapshot this screen reports to the server for the dashboard.</summary>
 public class DeviceStatusReport
@@ -20,6 +24,13 @@ public class DeviceStatusReport
     public string SyncMessage { get; set; } = "";
     public int SyncFilesDone { get; set; }
     public int SyncFilesTotal { get; set; }
+
+    /// <summary>Game folder of the file currently downloading.</summary>
+    public string SyncGame { get; set; } = "";
+    /// <summary>Bare filename currently downloading.</summary>
+    public string SyncFile { get; set; } = "";
+    /// <summary>Everything this sync set out to fetch, grouped by game.</summary>
+    public List<PendingGameDto> PendingGames { get; set; } = new();
 }
 
 /// <summary>

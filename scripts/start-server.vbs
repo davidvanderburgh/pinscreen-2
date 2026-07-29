@@ -11,16 +11,28 @@
 ' A SYSTEM scheduled task additionally survives logout and starts before login;
 ' install that instead with: scripts/install-server.ps1 -AsService (elevated).
 Option Explicit
-Dim sh, fso, dir, cmd
+Dim sh, fso, dir, cmd, stopFlag
 Set sh  = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
 sh.CurrentDirectory = dir
 cmd = """" & dir & "\Pinscreen2.Server.exe"""
+stopFlag = dir & "\stop.flag"
+
+' A stale flag from a previous stop must not block this start.
+If fso.FileExists(stopFlag) Then fso.DeleteFile stopFlag, True
 
 Do
   ' 0 = hidden window, True = block until the server process exits.
   sh.Run cmd, 0, True
+
+  ' "Stop server" in the tray menu drops this sentinel before exiting.
+  ' Without it the watchdog would faithfully undo every deliberate stop.
+  If fso.FileExists(stopFlag) Then
+    fso.DeleteFile stopFlag, True
+    WScript.Quit 0
+  End If
+
   ' Pause before relaunching so a hard startup failure cannot spin the CPU.
   WScript.Sleep 10000
 Loop

@@ -129,6 +129,28 @@ The watchdog is `scripts/start-server.vbs`: a hidden `wscript` loop that
 relaunches the exe whenever it exits. The server writes its own rolling
 `server.log` (5 MB, one prior generation kept) next to the exe.
 
+### System tray
+
+The server puts an icon in the notification area of the machine it runs on.
+Present means serving; gone means down (the watchdog relaunches within ~10s, so
+a permanently missing icon is a real fault). Hovering shows the video count and
+how many screens are online.
+
+Double-click opens the dashboard. Right-click gives: open dashboard, rescan
+library now, push sync to all screens, open the server log, open the library
+folder, restart, and stop. **Stop** writes a `stop.flag` sentinel that the
+watchdog checks after each run — without it the watchdog would faithfully undo
+every deliberate stop.
+
+Set `ShowTrayIcon: false` or pass `--no-tray` to disable. It has no effect under
+`-AsService`, where session 0 isolation means there is no desktop to attach to;
+that is the tradeoff for a server that starts before login.
+
+For a taskbar-pinned dashboard, `scripts/install-server.ps1` also creates a
+"Pinscreen Library" shortcut (Start Menu and desktop) that opens the dashboard
+in a browser app window. Windows 11 blocks programmatic taskbar pinning, so
+pinning that one is a manual right-click.
+
 ### Management dashboard
 
 Browse to `http://<hostname>:8088/` on any machine that can reach the server.
@@ -137,9 +159,18 @@ Browse to `http://<hostname>:8088/` on any machine that can reach the server.
   list its files. **Rescan now** rebuilds the manifest immediately instead of
   waiting for the timer.
 - **Pinscreens** — every screen that has ever connected, with online state,
-  cached video count, free disk space, app version, live sync progress, and when
-  it last finished a sync. **Sync** pushes to one screen; **Push sync to all**
-  pushes to every connected screen. Offline screens can be forgotten.
+  cached video count, free disk space, app version, and when it last finished a
+  sync. **Sync** pushes to one screen; **Push sync to all** pushes to every
+  connected screen. Offline screens can be forgotten.
+
+  While a screen is syncing it reports the game and file it is downloading, plus
+  an **Incoming** list of every game the sync intends to fetch with counts and
+  sizes — so you can eyeball what a screen is about to receive rather than
+  inferring it from one filename at a time.
+
+A file that exhausts its retries no longer aborts the sync; the screen finishes
+the rest and reports as `error` with a count of what failed. A single dropped
+connection used to strand every remaining file until the next push.
 
 Device records persist in `devices.json` next to the exe, so a powered-off
 screen still appears in the list.

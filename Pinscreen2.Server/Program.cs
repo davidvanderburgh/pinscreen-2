@@ -82,6 +82,15 @@ bool RefreshAndMaybePush(string reason)
 var refreshTimer = new System.Threading.Timer(_ => RefreshAndMaybePush("library-changed"), null,
     TimeSpan.FromMinutes(cfg.RefreshMinutes), TimeSpan.FromMinutes(cfg.RefreshMinutes));
 
+// Notification-area icon. Skipped for headless/service runs, where there is no
+// desktop to attach to.
+TrayIcon? tray = null;
+if (!args.Contains("--no-tray") && cfg.ShowTrayIcon && OperatingSystem.IsWindows())
+{
+    tray = new TrayIcon(library, devices, port, exeDir, RefreshAndMaybePush);
+    tray.Start();
+}
+
 // ---------------------------------------------------------------- pinscreen API
 
 app.MapGet("/manifest.json", (HttpContext ctx) =>
@@ -231,5 +240,6 @@ app.MapGet("/favicon.ico", () =>
 });
 
 app.Run();
+tray?.Dispose();
 GC.KeepAlive(refreshTimer);
 return 0;

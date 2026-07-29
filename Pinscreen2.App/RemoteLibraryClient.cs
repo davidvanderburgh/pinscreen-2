@@ -12,23 +12,51 @@ namespace Pinscreen2.App;
 
 public record RemoteFile(string Path, long Size);
 
+/// <summary>What a single game still owes, for the dashboard's incoming list.</summary>
+public record PendingGame(string Name, int Files, long Bytes);
+
 public class SyncProgress
 {
     public int FilesTotal { get; set; }
     public int FilesDownloaded { get; set; }
     public int FilesSkipped { get; set; }
+    /// <summary>Files that exhausted their retries. The sync continues past them.</summary>
+    public int FilesFailed { get; set; }
+    public string? LastError { get; set; }
     public long BytesNeeded { get; set; }
     public long BytesDownloaded { get; set; }
     public long FreeBytes { get; set; }
+    /// <summary>Manifest-relative path, so the game is its first segment.</summary>
     public string CurrentFile { get; set; } = string.Empty;
     public string? Message { get; set; }
     public bool Done { get; set; }
+
+    /// <summary>
+    /// Everything this sync intends to fetch, grouped by game and computed once
+    /// up front, so the dashboard can show what is coming rather than only what
+    /// is happening right now.
+    /// </summary>
+    public List<PendingGame> Pending { get; set; } = new();
+
+    /// <summary>Game folder of <see cref="CurrentFile"/>, or empty for a loose file.</summary>
+    public string CurrentGame => GameOf(CurrentFile);
+
+    public static string GameOf(string relPath)
+    {
+        if (string.IsNullOrEmpty(relPath)) return string.Empty;
+        var i = relPath.IndexOf('/');
+        return i < 0 ? string.Empty : relPath[..i];
+    }
 }
 
 public class RemoteLibraryClient
 {
     // Keep some breathing room on the destination drive after syncing.
     private const long DiskHeadroomBytes = 1024L * 1024 * 1024; // 1 GB
+
+    // Per-file retries before giving up on it and moving to the next.
+    private const int MaxAttemptsPerFile = 3;
+    private const int RetryDelayMs = 1500;
 
     private readonly HttpClient _http;
     private readonly string _baseUrl;
@@ -94,6 +122,17 @@ public class RemoteLibraryClient
         }
     }
 
+    /// <summary>
+    /// Drops a completed-or-faulted download from the in-flight map. The
+    /// ContinueWith that normally does this may not have run yet when the await
+    /// throws, so a retry could otherwise re-await the very task that just
+    /// failed and "fail" instantly forever.
+    /// </summary>
+    private void ForgetInFlight(string relPath)
+    {
+        lock (_gate) { _inFlight.Remove(relPath); }
+    }
+
     public static long GetFreeBytes(string anyPathOnTargetDrive)
     {
         try
@@ -127,6 +166,12 @@ public class RemoteLibraryClient
         report.FilesTotal = missing.Count;
         report.BytesNeeded = missing.Sum(f => f.Size);
         report.FreeBytes = GetFreeBytes(_cacheDir);
+        report.Pending = missing
+            .GroupBy(f => SyncProgress.GameOf(f.Path) is { Length: > 0 } g ? g : "(loose files)",
+                     StringComparer.OrdinalIgnoreCase)
+            .Select(g => new PendingGame(g.Key, g.Count(), g.Sum(f => f.Size)))
+            .OrderByDescending(g => g.Files)
+            .ToList();
 
         long budget = Math.Max(0, report.FreeBytes - DiskHeadroomBytes);
         long planned = 0;
@@ -152,28 +197,57 @@ public class RemoteLibraryClient
                 continue;
             }
             report.CurrentFile = f.Path;
-            report.Message = $"Downloading {i + 1}/{missing.Count}: {Path.GetFileName(f.Path)}";
+            var game = SyncProgress.GameOf(f.Path);
+            report.Message = $"Downloading {i + 1}/{missing.Count}: " +
+                             (string.IsNullOrEmpty(game) ? "" : $"{game} / ") + Path.GetFileName(f.Path);
             progress?.Report(Snapshot(report));
-            try
+
+            // Retry the file, then move on. A single failure used to abandon the
+            // entire remaining sync: restarting the server mid-sync severed one
+            // download and stranded the other ~479 files until someone pushed
+            // again. Over a DERP-relayed Tailscale link that is a routine event,
+            // not an exceptional one.
+            var downloaded = false;
+            for (int attempt = 1; attempt <= MaxAttemptsPerFile && !downloaded; attempt++)
             {
-                await EnsureCachedAsync(f, ct);
+                try
+                {
+                    await EnsureCachedAsync(f, ct);
+                    downloaded = true;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    // Drop the faulted task so the retry actually re-downloads
+                    // instead of awaiting the same failure again.
+                    ForgetInFlight(f.Path);
+                    if (attempt < MaxAttemptsPerFile)
+                    {
+                        report.Message = $"Retry {attempt}/{MaxAttemptsPerFile - 1} on {Path.GetFileName(f.Path)}: {ex.Message}";
+                        progress?.Report(Snapshot(report));
+                        await Task.Delay(RetryDelayMs * attempt, ct);
+                    }
+                    else
+                    {
+                        report.FilesFailed++;
+                        report.LastError = $"{Path.GetFileName(f.Path)}: {ex.Message}";
+                        Console.WriteLine($"Sync: giving up on {f.Path} after {MaxAttemptsPerFile} attempts ({ex.Message})");
+                    }
+                }
+            }
+
+            if (downloaded)
+            {
                 report.FilesDownloaded++;
                 report.BytesDownloaded += f.Size;
                 planned += f.Size;
             }
-            catch (Exception ex)
-            {
-                report.Message = $"Failed on {Path.GetFileName(f.Path)}: {ex.Message}";
-                report.Done = true;
-                progress?.Report(Snapshot(report));
-                return report;
-            }
         }
 
-        if (report.FilesSkipped > 0)
-            report.Message = $"Synced {report.FilesDownloaded}; skipped {report.FilesSkipped} (insufficient disk space).";
-        else
-            report.Message = $"Synced {report.FilesDownloaded} files.";
+        var parts = new List<string> { $"Synced {report.FilesDownloaded} files" };
+        if (report.FilesSkipped > 0) parts.Add($"skipped {report.FilesSkipped} (insufficient disk space)");
+        if (report.FilesFailed > 0) parts.Add($"{report.FilesFailed} failed");
+        report.Message = string.Join("; ", parts) + ".";
         report.Done = true;
         progress?.Report(Snapshot(report));
         return report;
@@ -184,12 +258,15 @@ public class RemoteLibraryClient
         FilesTotal = p.FilesTotal,
         FilesDownloaded = p.FilesDownloaded,
         FilesSkipped = p.FilesSkipped,
+        FilesFailed = p.FilesFailed,
+        LastError = p.LastError,
         BytesNeeded = p.BytesNeeded,
         BytesDownloaded = p.BytesDownloaded,
         FreeBytes = p.FreeBytes,
         CurrentFile = p.CurrentFile,
         Message = p.Message,
         Done = p.Done,
+        Pending = p.Pending,
     };
 
     public static string FormatBytes(long bytes)

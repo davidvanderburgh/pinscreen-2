@@ -14,4 +14,10 @@ public class ServerConfig
 
     /// <summary>How often to rescan the library folder, in minutes.</summary>
     public int RefreshMinutes { get; set; } = 5;
+
+    /// <summary>
+    /// Show the notification-area icon. Has no effect under a SYSTEM scheduled
+    /// task, where session 0 isolation means there is no desktop to attach to.
+    /// </summary>
+    public bool ShowTrayIcon { get; set; } = true;
 }

@@ -30,12 +30,22 @@ public class DeviceRecord
     public int SyncFilesTotal { get; set; }
     public DateTimeOffset? LastSyncAt { get; set; }
 
+    /// <summary>Game whose file is downloading right now.</summary>
+    public string SyncGame { get; set; } = "";
+    /// <summary>Filename downloading right now.</summary>
+    public string SyncFile { get; set; } = "";
+    /// <summary>What the running sync set out to fetch, grouped by game.</summary>
+    public List<PendingGame> PendingGames { get; set; } = new();
+
     /// <summary>
     /// Live connection state. Also lands in devices.json, which is harmless --
     /// <see cref="DeviceRegistry.Load"/> forces it false on startup.
     /// </summary>
     public bool Online { get; set; }
 }
+
+/// <summary>One game's outstanding work in a running sync.</summary>
+public record PendingGame(string Name, int Files, long Bytes);
 
 /// <summary>Status payload a device POSTs to <c>/api/devices/{id}/status</c>.</summary>
 public class DeviceStatusDto
@@ -49,6 +59,9 @@ public class DeviceStatusDto
     public string? SyncMessage { get; set; }
     public int SyncFilesDone { get; set; }
     public int SyncFilesTotal { get; set; }
+    public string? SyncGame { get; set; }
+    public string? SyncFile { get; set; }
+    public List<PendingGame>? PendingGames { get; set; }
 }
 
 /// <summary>One live SSE connection to a pinscreen.</summary>
@@ -169,12 +182,25 @@ public class DeviceRegistry
         rec.FreeBytes = dto.FreeBytes;
         rec.SyncFilesDone = dto.SyncFilesDone;
         rec.SyncFilesTotal = dto.SyncFilesTotal;
+        rec.SyncGame = dto.SyncGame ?? "";
+        rec.SyncFile = dto.SyncFile ?? "";
+        // Only replace the incoming list when the device actually sent one --
+        // the idle report at the end of a sync carries none, and clearing it
+        // then would blank the list the instant a sync finished.
+        if (dto.PendingGames is { Count: > 0 }) rec.PendingGames = dto.PendingGames;
         if (!string.IsNullOrWhiteSpace(dto.SyncState))
         {
             // Only stamp LastSyncAt on the syncing -> idle edge, so the dashboard
             // shows when a sync actually finished rather than when we last heard.
             if (rec.SyncState == "syncing" && dto.SyncState == "idle")
+            {
                 rec.LastSyncAt = DateTimeOffset.UtcNow;
+                // Nothing is incoming any more; a leftover list would read as
+                // work still queued.
+                rec.PendingGames = new List<PendingGame>();
+                rec.SyncGame = "";
+                rec.SyncFile = "";
+            }
             rec.SyncState = dto.SyncState!;
         }
         rec.SyncMessage = dto.SyncMessage ?? "";

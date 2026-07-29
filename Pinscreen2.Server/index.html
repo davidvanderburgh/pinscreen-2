@@ -50,6 +50,18 @@
   .dev .acts { display: flex; gap: 8px; }
   .bar { height: 4px; background: var(--panel2); border-radius: 2px; margin-top: 7px; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+  .incoming { margin-top: 8px; }
+  .incoming > summary { cursor: pointer; color: var(--dim); font-size: 12px; list-style: none; }
+  .incoming > summary::-webkit-details-marker { display: none; }
+  .incoming > summary::before { content: '▸ '; }
+  .incoming[open] > summary::before { content: '▾ '; }
+  .incoming > summary:hover { color: var(--fg); }
+  .incoming .games { margin-top: 6px; max-height: 220px; overflow: auto;
+                     border-left: 2px solid var(--line); padding-left: 10px; }
+  .incoming .games > div { display: flex; justify-content: space-between; gap: 16px;
+                           font-size: 12px; padding: 2px 0; }
+  .incoming .games > div > span:last-child { color: var(--dim); white-space: nowrap;
+                                             font-variant-numeric: tabular-nums; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 9px 18px; border-bottom: 1px solid var(--line); }
   th { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; font-weight: 600; }
@@ -150,6 +162,16 @@ async function loadStats() {
   ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 }
 
+// The device list re-renders every 3s; without this an expanded incoming list
+// would slam shut under the user mid-read. `toggle` doesn't bubble, so capture.
+const expandedIncoming = new Set();
+$('#devices').addEventListener('toggle', e => {
+  const el = e.target;
+  if (!el.classList || !el.classList.contains('incoming')) return;
+  if (el.open) expandedIncoming.add(el.dataset.dev);
+  else expandedIncoming.delete(el.dataset.dev);
+}, true);
+
 async function loadDevices() {
   const list = await api('/api/devices');
   const el = $('#devices');
@@ -171,7 +193,7 @@ async function loadDevices() {
         <div class="name">${esc(d.name || d.id)}</div>
         <div class="meta">${esc(meta)}</div>
         ${d.syncState === 'syncing'
-          ? `<div class="meta">${esc(d.syncMessage || 'Syncing…')}</div><div class="bar"><i style="width:${pct}%"></i></div>`
+          ? syncingBlock(d, pct)
           : d.syncState === 'error'
             ? `<div class="meta" style="color:var(--err)">${esc(d.syncMessage || 'Sync failed')}</div>`
             : d.lastSyncAt ? `<div class="meta">last sync ${ago(d.lastSyncAt)}</div>` : ''}
@@ -187,6 +209,34 @@ async function loadDevices() {
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Older clients (<= v1.8.1) report only a message string, so fall back to it
+// rather than showing a screen mid-sync with no detail at all.
+function syncingBlock(d, pct) {
+  const games = d.pendingGames || [];
+  const counted = d.syncFilesTotal || 0;
+  const now = d.syncGame
+    ? `<span style="color:var(--accent)">${esc(d.syncGame)}</span>` +
+      (d.syncFile ? ` · ${esc(d.syncFile)}` : '')
+    : esc(d.syncMessage || 'Syncing…');
+
+  const head = `<div class="meta">${counted ? `${d.syncFilesDone}/${counted} · ` : ''}${now}</div>` +
+               `<div class="bar"><i style="width:${pct}%"></i></div>`;
+  if (!games.length) return head;
+
+  // Sorted biggest-first by the client so the headline changes are on top.
+  const totalFiles = games.reduce((a, g) => a + g.files, 0);
+  const totalBytes = games.reduce((a, g) => a + g.bytes, 0);
+  return head +
+    `<details class="incoming" data-dev="${esc(d.id)}" ${expandedIncoming.has(d.id) ? 'open' : ''}>
+       <summary>Incoming: ${games.length} game${games.length === 1 ? '' : 's'} · ` +
+         `${totalFiles.toLocaleString()} videos · ${bytes(totalBytes)}</summary>
+       <div class="games">` +
+         games.map(g => `<div><span>${esc(g.name)}</span>` +
+           `<span>${g.files.toLocaleString()} · ${bytes(g.bytes)}</span></div>`).join('') +
+       `</div>
+     </details>`;
 }
 
 let allGames = [];

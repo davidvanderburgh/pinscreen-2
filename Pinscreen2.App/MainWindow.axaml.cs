@@ -506,14 +506,17 @@ public partial class MainWindow : Window
                 _remoteStatus = p.Message ?? string.Empty;
                 if (interactive) UpdateSyncHud(p);
                 UpdateStatus();
-                ReportAgentStatus("syncing", p.Message ?? string.Empty, p.FilesDownloaded, p.FilesTotal);
+                ReportAgentStatus("syncing", p.Message ?? string.Empty, p.FilesDownloaded, p.FilesTotal, p);
             });
             var result = await _remoteClient!.SyncAsync(progress);
             await BuildPlaylistAsync();
             if (_mediaPlayer != null && !_mediaPlayer.IsPlaying)
                 PlayNext();
 
-            ReportAgentStatus("idle", result.Message ?? string.Empty, result.FilesDownloaded, result.FilesTotal);
+            // Files that exhausted their retries no longer abort the sync, but
+            // the dashboard should still show the screen as unhealthy.
+            ReportAgentStatus(result.FilesFailed > 0 ? "error" : "idle",
+                result.Message ?? string.Empty, result.FilesDownloaded, result.FilesTotal);
 
             if (interactive && result.FilesSkipped > 0)
             {
@@ -2177,7 +2180,7 @@ public partial class MainWindow : Window
         SyncMessage = _remoteStatus,
     };
 
-    private void ReportAgentStatus(string state, string message, int done, int total)
+    private void ReportAgentStatus(string state, string message, int done, int total, SyncProgress? p = null)
     {
         var agent = _agent;
         if (agent == null) return;
@@ -2186,6 +2189,14 @@ public partial class MainWindow : Window
         report.SyncMessage = message;
         report.SyncFilesDone = done;
         report.SyncFilesTotal = total;
+        if (p != null)
+        {
+            report.SyncGame = p.CurrentGame;
+            report.SyncFile = string.IsNullOrEmpty(p.CurrentFile) ? "" : Path.GetFileName(p.CurrentFile);
+            report.PendingGames = p.Pending
+                .Select(g => new PendingGameDto(g.Name, g.Files, g.Bytes))
+                .ToList();
+        }
         _ = agent.ReportAsync(report);
     }
 
