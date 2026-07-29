@@ -34,8 +34,26 @@ public class DeviceRecord
     public string SyncGame { get; set; } = "";
     /// <summary>Filename downloading right now.</summary>
     public string SyncFile { get; set; } = "";
-    /// <summary>What the running sync set out to fetch, grouped by game.</summary>
+
+    /// <summary>
+    /// What this screen is missing relative to the library, grouped by game --
+    /// reported while idle too, so the dashboard can answer "does this need a
+    /// sync?" without anyone pressing Sync to find out.
+    /// </summary>
     public List<PendingGame> PendingGames { get; set; } = new();
+    public int PendingFiles { get; set; }
+    public long PendingBytes { get; set; }
+    public DateTimeOffset? PendingCheckedAt { get; set; }
+
+    /// <summary>Recent syncs, newest first.</summary>
+    public List<SyncHistoryEntry> History { get; set; } = new();
+
+    /// <summary>
+    /// Clock-placement diagnostics. The app has no console and the screens are
+    /// wall-mounted, so this is how a display-wake re-anchor is confirmed.
+    /// </summary>
+    public int ClockReplacements { get; set; }
+    public string DisplayGeometry { get; set; } = "";
 
     /// <summary>
     /// Live connection state. Also lands in devices.json, which is harmless --
@@ -46,6 +64,25 @@ public class DeviceRecord
 
 /// <summary>One game's outstanding work in a running sync.</summary>
 public record PendingGame(string Name, int Files, long Bytes);
+
+/// <summary>One completed sync in a screen's history.</summary>
+public class SyncHistoryEntry
+{
+    public DateTimeOffset At { get; set; }
+    public int FilesDownloaded { get; set; }
+    public long BytesDownloaded { get; set; }
+    public int FilesFailed { get; set; }
+    public List<string> Games { get; set; } = new();
+}
+
+/// <summary>A finished sync a device reports for its history.</summary>
+public class CompletedSyncDto
+{
+    public int FilesDownloaded { get; set; }
+    public long BytesDownloaded { get; set; }
+    public int FilesFailed { get; set; }
+    public List<string>? Games { get; set; }
+}
 
 /// <summary>Status payload a device POSTs to <c>/api/devices/{id}/status</c>.</summary>
 public class DeviceStatusDto
@@ -61,7 +98,14 @@ public class DeviceStatusDto
     public int SyncFilesTotal { get; set; }
     public string? SyncGame { get; set; }
     public string? SyncFile { get; set; }
+    /// <summary>Null means "not measured"; an empty list means "up to date".</summary>
     public List<PendingGame>? PendingGames { get; set; }
+    public int PendingFiles { get; set; }
+    public long PendingBytes { get; set; }
+    public DateTimeOffset? PendingCheckedAt { get; set; }
+    public CompletedSyncDto? CompletedSync { get; set; }
+    public int ClockReplacements { get; set; }
+    public string? DisplayGeometry { get; set; }
 }
 
 /// <summary>One live SSE connection to a pinscreen.</summary>
@@ -86,6 +130,8 @@ internal sealed class DeviceConnection
 /// </summary>
 public class DeviceRegistry
 {
+    private const int MaxHistoryEntries = 25;
+
     private readonly ConcurrentDictionary<string, DeviceRecord> _devices = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DeviceConnection> _connections = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _statePath;
@@ -184,10 +230,33 @@ public class DeviceRegistry
         rec.SyncFilesTotal = dto.SyncFilesTotal;
         rec.SyncGame = dto.SyncGame ?? "";
         rec.SyncFile = dto.SyncFile ?? "";
-        // Only replace the incoming list when the device actually sent one --
-        // the idle report at the end of a sync carries none, and clearing it
-        // then would blank the list the instant a sync finished.
-        if (dto.PendingGames is { Count: > 0 }) rec.PendingGames = dto.PendingGames;
+        rec.ClockReplacements = dto.ClockReplacements;
+        if (!string.IsNullOrWhiteSpace(dto.DisplayGeometry)) rec.DisplayGeometry = dto.DisplayGeometry!;
+
+        // Null means the report didn't measure the diff, so keep what we had.
+        // An empty list is a positive "up to date" and must overwrite.
+        if (dto.PendingGames != null)
+        {
+            rec.PendingGames = dto.PendingGames;
+            rec.PendingFiles = dto.PendingFiles;
+            rec.PendingBytes = dto.PendingBytes;
+            rec.PendingCheckedAt = dto.PendingCheckedAt ?? DateTimeOffset.UtcNow;
+        }
+
+        if (dto.CompletedSync != null)
+        {
+            rec.History.Insert(0, new SyncHistoryEntry
+            {
+                At = DateTimeOffset.UtcNow,
+                FilesDownloaded = dto.CompletedSync.FilesDownloaded,
+                BytesDownloaded = dto.CompletedSync.BytesDownloaded,
+                FilesFailed = dto.CompletedSync.FilesFailed,
+                Games = dto.CompletedSync.Games ?? new List<string>(),
+            });
+            // Keep the diary useful, not unbounded.
+            if (rec.History.Count > MaxHistoryEntries)
+                rec.History.RemoveRange(MaxHistoryEntries, rec.History.Count - MaxHistoryEntries);
+        }
         if (!string.IsNullOrWhiteSpace(dto.SyncState))
         {
             // Only stamp LastSyncAt on the syncing -> idle edge, so the dashboard
@@ -195,11 +264,11 @@ public class DeviceRegistry
             if (rec.SyncState == "syncing" && dto.SyncState == "idle")
             {
                 rec.LastSyncAt = DateTimeOffset.UtcNow;
-                // Nothing is incoming any more; a leftover list would read as
-                // work still queued.
-                rec.PendingGames = new List<PendingGame>();
                 rec.SyncGame = "";
                 rec.SyncFile = "";
+                // PendingGames is deliberately left alone: the device re-diffs
+                // itself right after a sync and that answer is authoritative.
+                // Zeroing it here would flash "up to date" before we know.
             }
             rec.SyncState = dto.SyncState!;
         }

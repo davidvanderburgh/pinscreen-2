@@ -104,6 +104,38 @@ public class RemoteLibraryClient
         return true;
     }
 
+    /// <summary>What this screen is missing relative to the server, downloading nothing.</summary>
+    public record PendingSummary(int Files, long Bytes, List<PendingGame> Games);
+
+    /// <summary>
+    /// Diffs the server manifest against the local cache without fetching
+    /// anything, so the dashboard can answer "does this screen need a sync?"
+    /// before anyone presses the button. Comparing total counts alone can't:
+    /// two libraries of equal size are not necessarily the same library.
+    ///
+    /// Costs one manifest fetch (cached server-side) plus a stat per entry, so
+    /// callers should run it on a background thread and not on a fast timer.
+    /// </summary>
+    public async Task<PendingSummary> ComputePendingAsync(CancellationToken ct = default)
+    {
+        var manifest = await FetchManifestAsync(ct);
+        var missing = new List<RemoteFile>();
+        foreach (var f in manifest)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!IsCached(f.Path, f.Size)) missing.Add(f);
+        }
+
+        var games = missing
+            .GroupBy(f => SyncProgress.GameOf(f.Path) is { Length: > 0 } g ? g : "(loose files)",
+                     StringComparer.OrdinalIgnoreCase)
+            .Select(g => new PendingGame(g.Key, g.Count(), g.Sum(f => f.Size)))
+            .OrderByDescending(g => g.Files)
+            .ToList();
+
+        return new PendingSummary(missing.Count, missing.Sum(f => f.Size), games);
+    }
+
     public Task<string> EnsureCachedAsync(RemoteFile file, CancellationToken ct = default)
     {
         var local = GetCachePath(file.Path);

@@ -50,6 +50,8 @@
   .dev .acts { display: flex; gap: 8px; }
   .bar { height: 4px; background: var(--panel2); border-radius: 2px; margin-top: 7px; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+  .ok-tag { color: var(--ok); }
+  .behind-tag { color: var(--warn); font-weight: 600; }
   .incoming { margin-top: 8px; }
   .incoming > summary { cursor: pointer; color: var(--dim); font-size: 12px; list-style: none; }
   .incoming > summary::-webkit-details-marker { display: none; }
@@ -99,6 +101,7 @@
     <div class="sec-head">
       <h2>Pinscreens</h2>
       <span class="spacer"></span>
+      <button id="checkAll" title="Ask every screen to re-compare itself against the library">Re-check all</button>
       <button id="syncAll" class="primary">Push sync to all</button>
     </div>
     <div class="devices" id="devices"></div>
@@ -183,6 +186,9 @@ async function loadDevices() {
   el.innerHTML = list.map(d => {
     const cls = !d.online ? '' : d.syncState === 'syncing' ? 'syncing' : d.syncState === 'error' ? 'err' : 'on';
     const pct = d.syncFilesTotal > 0 ? Math.round(100 * d.syncFilesDone / d.syncFilesTotal) : 0;
+    const display = d.displayGeometry
+      ? ` · <span title="Display geometry the clock is anchored to${d.clockReplacements ? `; re-anchored ${d.clockReplacements}× since launch` : ''}">🖵 ${esc((d.displayGeometry.split('|')[0] || '').replace(/\.\d+/g, ''))}${d.clockReplacements ? ` ·${d.clockReplacements}` : ''}</span>`
+      : '';
     const meta = d.online
       ? `${d.cachedFiles.toLocaleString()} videos cached · ${bytes(d.cachedBytes)} · ${bytes(d.freeBytes)} free` +
         (d.version ? ` · v${d.version}` : '') + (d.address ? ` · ${d.address}` : '')
@@ -191,15 +197,16 @@ async function loadDevices() {
       <span class="dot ${cls}"></span>
       <div>
         <div class="name">${esc(d.name || d.id)}</div>
-        <div class="meta">${esc(meta)}</div>
+        <div class="meta">${esc(meta)}${display}</div>
         ${d.syncState === 'syncing'
           ? syncingBlock(d, pct)
           : d.syncState === 'error'
-            ? `<div class="meta" style="color:var(--err)">${esc(d.syncMessage || 'Sync failed')}</div>`
-            : d.lastSyncAt ? `<div class="meta">last sync ${ago(d.lastSyncAt)}</div>` : ''}
+            ? `<div class="meta" style="color:var(--err)">${esc(d.syncMessage || 'Sync failed')}</div>${behindBlock(d)}`
+            : behindBlock(d)}
+        ${historyBlock(d)}
       </div>
       <div class="acts">
-        <button data-sync="${esc(d.id)}" ${d.online ? '' : 'disabled'}>Sync</button>
+        <button data-sync="${esc(d.id)}" ${d.online && needsSync(d) ? 'class="primary"' : ''} ${d.online ? '' : 'disabled'}>Sync</button>
         <button class="danger" data-forget="${esc(d.id)}" ${d.online ? 'disabled' : ''}>Forget</button>
       </div>
     </div>`;
@@ -209,6 +216,54 @@ async function loadDevices() {
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function needsSync(d) { return (d.pendingFiles || 0) > 0; }
+
+// Answers "do I need to press Sync?" without pressing it. Screens re-diff
+// themselves on connect, when the library changes, after every sync, and on a
+// 15-minute backstop; pendingCheckedAt says how fresh that answer is.
+// Clients before v1.8.3 never report it, hence the unknown state.
+function behindBlock(d) {
+  if (!d.pendingCheckedAt) {
+    return d.lastSyncAt
+      ? `<div class="meta">last sync ${ago(d.lastSyncAt)} · <span style="opacity:.7">up-to-date state unknown (older client)</span></div>`
+      : `<div class="meta" style="opacity:.7">up-to-date state unknown (older client)</div>`;
+  }
+  const last = d.lastSyncAt ? `last sync ${ago(d.lastSyncAt)} · ` : '';
+  if (!needsSync(d)) {
+    return `<div class="meta">${last}<span class="ok-tag">✓ up to date</span> ` +
+           `<span style="opacity:.6">checked ${ago(d.pendingCheckedAt)}</span></div>`;
+  }
+  const games = d.pendingGames || [];
+  const head = `<div class="meta">${last}<span class="behind-tag">` +
+    `${d.pendingFiles.toLocaleString()} video${d.pendingFiles === 1 ? '' : 's'} behind</span> · ` +
+    `${bytes(d.pendingBytes)} <span style="opacity:.6">checked ${ago(d.pendingCheckedAt)}</span></div>`;
+  if (!games.length) return head;
+  return head +
+    `<details class="incoming" data-dev="${esc(d.id)}" ${expandedIncoming.has(d.id) ? 'open' : ''}>
+       <summary>${games.length} game${games.length === 1 ? '' : 's'} to sync</summary>
+       <div class="games">` +
+         games.map(g => `<div><span>${esc(g.name)}</span>` +
+           `<span>${g.files.toLocaleString()} · ${bytes(g.bytes)}</span></div>`).join('') +
+       `</div>
+     </details>`;
+}
+
+// The diary: what this screen actually pulled, and when.
+function historyBlock(d) {
+  const h = d.history || [];
+  if (!h.length) return '';
+  return `<details class="incoming" data-dev="hist-${esc(d.id)}" ${expandedIncoming.has('hist-' + d.id) ? 'open' : ''}>
+       <summary>Sync history (${h.length})</summary>
+       <div class="games">` +
+         h.map(e => `<div><span>${ago(e.at)} · ${(e.filesDownloaded ?? 0).toLocaleString()} videos` +
+           `${e.filesFailed ? ` <span style="color:var(--err)">${e.filesFailed} failed</span>` : ''}` +
+           `${(e.games || []).length ? ` <span style="opacity:.6">${esc((e.games || []).slice(0, 3).join(', '))}` +
+              `${(e.games || []).length > 3 ? ` +${e.games.length - 3}` : ''}</span>` : ''}</span>` +
+           `<span>${bytes(e.bytesDownloaded ?? 0)}</span></div>`).join('') +
+       `</div>
+     </details>`;
 }
 
 // Older clients (<= v1.8.1) report only a message string, so fall back to it
@@ -296,6 +351,14 @@ $('#syncAll').addEventListener('click', async () => {
   try {
     const r = await api('/api/devices/sync-all', { method: 'POST' });
     toast(r.sent ? `Sync pushed to ${r.sent} screen${r.sent === 1 ? '' : 's'}.` : 'No screens are online.');
+  } catch (err) { toast('Failed: ' + err.message); }
+  refresh();
+});
+
+$('#checkAll').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/devices/check-all', { method: 'POST' });
+    toast(r.sent ? `Re-check asked of ${r.sent} screen${r.sent === 1 ? '' : 's'}.` : 'No screens are online.');
   } catch (err) { toast('Failed: ' + err.message); }
   refresh();
 });

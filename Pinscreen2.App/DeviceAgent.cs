@@ -12,6 +12,9 @@ namespace Pinscreen2.App;
 /// <summary>One game's outstanding work, for the dashboard's incoming list.</summary>
 public record PendingGameDto(string Name, int Files, long Bytes);
 
+/// <summary>A finished sync, appended to the server-side history for this screen.</summary>
+public record CompletedSyncDto(int FilesDownloaded, long BytesDownloaded, int FilesFailed, List<string> Games);
+
 /// <summary>Snapshot this screen reports to the server for the dashboard.</summary>
 public class DeviceStatusReport
 {
@@ -29,8 +32,25 @@ public class DeviceStatusReport
     public string SyncGame { get; set; } = "";
     /// <summary>Bare filename currently downloading.</summary>
     public string SyncFile { get; set; } = "";
-    /// <summary>Everything this sync set out to fetch, grouped by game.</summary>
-    public List<PendingGameDto> PendingGames { get; set; } = new();
+
+    /// <summary>
+    /// What this screen is missing relative to the server, grouped by game.
+    /// Null means "not measured in this report" and leaves the server's copy
+    /// alone; an empty list positively means "up to date".
+    /// </summary>
+    public List<PendingGameDto>? PendingGames { get; set; }
+    public int PendingFiles { get; set; }
+    public long PendingBytes { get; set; }
+    /// <summary>When the diff above was computed, so the dashboard can age it.</summary>
+    public DateTimeOffset? PendingCheckedAt { get; set; }
+
+    /// <summary>Set once when a sync finishes, to append to the history.</summary>
+    public CompletedSyncDto? CompletedSync { get; set; }
+
+    /// <summary>How many times the clock popup has been re-anchored after a display change.</summary>
+    public int ClockReplacements { get; set; }
+    /// <summary>Current display geometry signature, for diagnosing clock placement.</summary>
+    public string DisplayGeometry { get; set; } = "";
 }
 
 /// <summary>
@@ -64,6 +84,13 @@ public class DeviceAgent : IDisposable
 
     /// <summary>Raised when the server pushes a sync command.</summary>
     public Func<Task>? SyncRequested { get; set; }
+
+    /// <summary>
+    /// Raised when the server says the library changed but is not asking for a
+    /// sync, and once per successful connect. The screen answers by re-diffing
+    /// itself so the dashboard knows whether it is behind.
+    /// </summary>
+    public Func<Task>? CheckRequested { get; set; }
 
     /// <summary>Called to build the periodic status heartbeat.</summary>
     public Func<DeviceStatusReport>? StatusProvider { get; set; }
@@ -131,8 +158,10 @@ public class DeviceAgent : IDisposable
         Console.WriteLine($"DeviceAgent: connected to {_baseUrl} as '{_deviceName}'");
 
         // Announce current state right away so the dashboard is populated the
-        // moment a screen comes online.
+        // moment a screen comes online, then re-diff against the server so its
+        // "behind by N" figure isn't left over from before the screen was off.
         _ = ReportAsync(null, ct);
+        Fire(CheckRequested, "connect", ct);
 
         using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream, Encoding.UTF8);
@@ -151,23 +180,30 @@ public class DeviceAgent : IDisposable
             }
             else if (line.StartsWith("data:", StringComparison.Ordinal))
             {
+                // Never block the read loop -- these handlers can run for
+                // minutes and we must keep reading keepalives meanwhile.
                 if (string.Equals(evt, "sync", StringComparison.Ordinal))
                 {
                     Console.WriteLine("DeviceAgent: sync pushed by server");
-                    var handler = SyncRequested;
-                    if (handler != null)
-                    {
-                        // Do not block the read loop -- a sync can take a long
-                        // time and we must keep reading keepalives meanwhile.
-                        _ = Task.Run(async () =>
-                        {
-                            try { await handler(); }
-                            catch (Exception ex) { Console.WriteLine($"DeviceAgent: sync handler failed: {ex.Message}"); }
-                        }, ct);
-                    }
+                    Fire(SyncRequested, "sync", ct);
+                }
+                else if (string.Equals(evt, "check", StringComparison.Ordinal))
+                {
+                    Console.WriteLine("DeviceAgent: library changed, re-checking");
+                    Fire(CheckRequested, "check", ct);
                 }
             }
         }
+    }
+
+    private static void Fire(Func<Task>? handler, string what, CancellationToken ct)
+    {
+        if (handler == null) return;
+        _ = Task.Run(async () =>
+        {
+            try { await handler(); }
+            catch (Exception ex) { Console.WriteLine($"DeviceAgent: {what} handler failed: {ex.Message}"); }
+        }, ct);
     }
 
     /// <summary>Posts a status snapshot. Pass null to use <see cref="StatusProvider"/>.</summary>

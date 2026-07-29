@@ -71,12 +71,21 @@ _ = Task.Run(() => library.Refresh());
 bool RefreshAndMaybePush(string reason)
 {
     var changed = library.Refresh();
-    if (changed && cfg.AutoPushOnChange)
+    if (!changed) return false;
+
+    if (cfg.AutoPushOnChange)
     {
         var n = devices.Broadcast("sync", new { reason, at = library.BuiltAt });
         if (n > 0) Console.WriteLine($"Library changed -- pushed sync to {n} device(s)");
     }
-    return changed;
+    else
+    {
+        // Auto-push off still means screens should re-diff themselves, so the
+        // dashboard can show who is behind before anyone presses Sync.
+        var n = devices.Broadcast("check", new { reason, at = library.BuiltAt });
+        if (n > 0) Console.WriteLine($"Library changed -- asked {n} device(s) to re-check");
+    }
+    return true;
 }
 
 var refreshTimer = new System.Threading.Timer(_ => RefreshAndMaybePush("library-changed"), null,
@@ -203,6 +212,19 @@ app.MapPost("/api/devices/sync-all", () =>
 {
     var n = devices.Broadcast("sync", new { reason = "manual-all", at = DateTimeOffset.UtcNow });
     return Results.Ok(new { sent = n });
+});
+
+// Ask screens to re-diff themselves against the library without downloading.
+app.MapPost("/api/devices/check-all", () =>
+{
+    var n = devices.Broadcast("check", new { reason = "manual-all", at = DateTimeOffset.UtcNow });
+    return Results.Ok(new { sent = n });
+});
+
+app.MapPost("/api/devices/{id}/check", (string id) =>
+{
+    var sent = devices.Send(id, "check", new { reason = "manual", at = DateTimeOffset.UtcNow });
+    return sent ? Results.Ok(new { sent = 1 }) : Results.Json(new { sent = 0, error = "device offline" }, statusCode: 409);
 });
 
 app.MapPost("/api/manifest/refresh", () =>

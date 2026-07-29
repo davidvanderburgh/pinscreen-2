@@ -172,6 +172,42 @@ A file that exhausts its retries no longer aborts the sync; the screen finishes
 the rest and reports as `error` with a count of what failed. A single dropped
 connection used to strand every remaining file until the next push.
 
+### Knowing whether a screen needs a sync
+
+Each screen diffs itself against the server manifest without downloading
+anything, and reports the result: **✓ up to date** or **N videos behind** with
+the games listed. Comparing cached counts alone can't answer this — two
+libraries of equal size are not necessarily the same library.
+
+The diff runs on connect, whenever the library changes, after every sync, and on
+a 15-minute backstop. **Re-check all** forces it. Each screen also keeps a sync
+history (last 25) of what it pulled and when.
+
+Screens older than v1.8.3 don't report it and show "up-to-date state unknown".
+
+### Clock placement after a display wake
+
+The clock lives in a `Popup` because it has to paint above the native LibVLC
+`VideoView`. On Windows a Popup is its own top-level native window, and Avalonia
+places it when it *opens* — it does not follow the owner afterwards. A monitor
+sleep/wake usually drops and re-adds the display, resizing the main window; the
+`Canvas` inside the popup re-lays-out correctly (it is bound to
+`PlacementTarget.Bounds`) but the popup's own window keeps its old size and
+offset, so the clock sits at correct coordinates inside a stale window.
+
+That is why adjusting the positioning maths never fixed it — the maths was never
+wrong. `EnsureClockPlacement` samples a geometry signature on the existing
+1-second clock timer and, when it changes and then holds for one tick, closes and
+reopens the popup to force Avalonia to re-place it. Sampling rather than
+subscribing is deliberate: display events arrive in bursts during a wake, and
+reacting to each is what caused the hangs that moved clock updates onto a timer
+in the first place.
+
+The app is a `WinExe` with no console, so each re-anchor is reported to the
+dashboard as a counter next to the screen's display geometry (`🖵 1920x1080 ·3`).
+Sleep and wake the monitor and watch that number increment to confirm the fix is
+firing on a given screen.
+
 Device records persist in `devices.json` next to the exe, so a powered-off
 screen still appears in the list.
 

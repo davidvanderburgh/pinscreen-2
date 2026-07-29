@@ -48,6 +48,10 @@ public partial class MainWindow : Window
     private DeviceAgent? _agent;
     private DispatcherTimer? _statusTimer;
     private string _syncTargetFolder = string.Empty;
+    private int _pendingCheckBusy;
+    private DispatcherTimer? _pendingTimer;
+    private int _clockReplacements;
+    private string _lastDisplayGeometry = string.Empty;
     // Library totals from the last playlist build, so the status heartbeat
     // doesn't have to re-stat 30k files every 30 seconds.
     private int _libraryFileCount;
@@ -515,8 +519,7 @@ public partial class MainWindow : Window
 
             // Files that exhausted their retries no longer abort the sync, but
             // the dashboard should still show the screen as unhealthy.
-            ReportAgentStatus(result.FilesFailed > 0 ? "error" : "idle",
-                result.Message ?? string.Empty, result.FilesDownloaded, result.FilesTotal);
+            ReportCompletedSync(result);
 
             if (interactive && result.FilesSkipped > 0)
             {
@@ -1446,9 +1449,122 @@ public partial class MainWindow : Window
     private void SetupClock()
     {
         _clockTimer.Interval = TimeSpan.FromSeconds(1);
-        _clockTimer.Tick += (_, __) => UpdateClock();
+        _clockTimer.Tick += (_, __) => { EnsureClockPlacement(); UpdateClock(); };
         _clockTimer.Start();
         UpdateClock();
+    }
+
+    private string _lastGeometrySignature = string.Empty;
+    private string _pendingGeometrySignature = string.Empty;
+    private bool _geometryTracked;
+
+    /// <summary>
+    /// Everything that, if it changes, invalidates where the clock popup was
+    /// placed. Sampled rather than subscribed to: a monitor wake changes these
+    /// several times in a burst, and reacting to each event is what caused the
+    /// hangs that moved clock updates onto a timer in the first place.
+    /// </summary>
+    private string CurrentGeometrySignature()
+    {
+        var sb = new System.Text.StringBuilder();
+        try { sb.Append(ClientSize.Width).Append('x').Append(ClientSize.Height); } catch { }
+        try
+        {
+            var root = this.FindControl<Grid>("RootGrid");
+            if (root != null) sb.Append('|').Append(root.Bounds.Width).Append('x').Append(root.Bounds.Height);
+        }
+        catch { }
+        try { sb.Append('|').Append(Position.X).Append(',').Append(Position.Y); } catch { }
+        try { sb.Append('|').Append(WindowState); } catch { }
+        try
+        {
+            var screen = Screens?.ScreenFromWindow(this);
+            if (screen != null)
+                sb.Append('|').Append(screen.Bounds.Width).Append('x').Append(screen.Bounds.Height)
+                  .Append('@').Append(screen.Scaling);
+        }
+        catch { }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Re-anchors the clock popup when the display geometry has changed.
+    ///
+    /// The clock lives in a Popup because it has to paint above the native
+    /// LibVLC VideoView. On Windows a Popup is its own top-level native window,
+    /// and Avalonia positions it when it opens -- it does not follow the owner
+    /// afterwards. A monitor sleep/wake typically drops and re-adds the display,
+    /// which resizes the main window; the Canvas inside the popup re-lays-out
+    /// correctly (it is bound to PlacementTarget.Bounds) but the popup's own
+    /// window keeps its old size and offset. The clock then sits at the right
+    /// coordinates inside a stale window, which is what shows up as "no longer
+    /// centered".
+    ///
+    /// That is why adjusting the positioning maths never fixed it: the maths was
+    /// never wrong. Closing and reopening the popup is what forces Avalonia to
+    /// place it against the current geometry.
+    /// </summary>
+    private void EnsureClockPlacement()
+    {
+        string signature;
+        try { signature = CurrentGeometrySignature(); }
+        catch { return; }
+
+        if (string.IsNullOrEmpty(signature)) return;
+
+        // First observation establishes the baseline; nothing to correct yet.
+        if (!_geometryTracked)
+        {
+            _geometryTracked = true;
+            _lastGeometrySignature = signature;
+            return;
+        }
+
+        if (signature == _lastGeometrySignature)
+        {
+            _pendingGeometrySignature = string.Empty;
+            return;
+        }
+
+        // Require the new geometry to hold for one tick. During a wake the size
+        // lands on several intermediate values, and re-placing on each of them
+        // both flickers and can settle against a value that is already stale.
+        if (signature != _pendingGeometrySignature)
+        {
+            _pendingGeometrySignature = signature;
+            return;
+        }
+
+        _lastGeometrySignature = signature;
+        _pendingGeometrySignature = string.Empty;
+
+        try
+        {
+            var popup = ClockPopup;
+            // A closed popup is re-placed when it next opens, so leave it alone.
+            if (popup == null || !popup.IsOpen) return;
+
+            popup.IsOpen = false;
+            // Reopen after layout settles rather than in the same frame.
+            Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    popup.IsOpen = true;
+                    UpdateClock();
+                }
+                catch (Exception ex) { Console.WriteLine($"Clock popup reopen failed: {ex.Message}"); }
+            }, DispatcherPriority.Background);
+
+            // Surfaced on the dashboard: the app is a WinExe with no console, and
+            // these screens are wall-mounted, so this counter is the only way to
+            // confirm from anywhere that a wake actually triggered a re-anchor.
+            _clockReplacements++;
+            _lastDisplayGeometry = signature;
+            _ = _agent?.ReportAsync(BuildStatusReport());
+            Console.WriteLine($"Clock popup re-placed for geometry {signature}");
+        }
+        catch (Exception ex) { Console.WriteLine($"Clock re-placement failed: {ex.Message}"); }
     }
 
     private bool _updatingClock;
@@ -2145,7 +2261,17 @@ public partial class MainWindow : Window
             });
             return tcs.Task;
         };
+        _agent.CheckRequested = () => RefreshPendingAsync();
         _agent.Start();
+
+        // Backstop for anything the push channel misses -- files curated into
+        // the library folder directly, a screen that was off during a change.
+        if (_pendingTimer == null)
+        {
+            _pendingTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(15) };
+            _pendingTimer.Tick += (_, __) => _ = RefreshPendingAsync();
+        }
+        _pendingTimer.Start();
 
         if (_statusTimer == null)
         {
@@ -2163,6 +2289,7 @@ public partial class MainWindow : Window
     private void StopDeviceAgent()
     {
         try { _statusTimer?.Stop(); } catch { }
+        try { _pendingTimer?.Stop(); } catch { }
         try { _agent?.Dispose(); } catch { }
         _agent = null;
     }
@@ -2178,7 +2305,52 @@ public partial class MainWindow : Window
             : RemoteLibraryClient.GetFreeBytes(_syncTargetFolder),
         SyncState = _isSyncing ? "syncing" : "idle",
         SyncMessage = _remoteStatus,
+        ClockReplacements = _clockReplacements,
+        DisplayGeometry = string.IsNullOrEmpty(_lastDisplayGeometry)
+            ? SafeGeometrySignature()
+            : _lastDisplayGeometry,
     };
+
+    private string SafeGeometrySignature()
+    {
+        try { return CurrentGeometrySignature(); } catch { return string.Empty; }
+    }
+
+    /// <summary>
+    /// Diffs this screen against the server and reports the result, so the
+    /// dashboard can say whether a sync is needed before anyone presses Sync.
+    /// Runs off the UI thread -- it stats every file in the manifest.
+    /// </summary>
+    private async Task RefreshPendingAsync()
+    {
+        var agent = _agent;
+        if (agent == null || string.IsNullOrWhiteSpace(_config.RemoteLibraryUrl)) return;
+        // A diff taken mid-sync is stale the moment it is computed.
+        if (_isSyncing) return;
+        if (Interlocked.Exchange(ref _pendingCheckBusy, 1) == 1) return;
+
+        try
+        {
+            EnsureRemoteClient();
+            var client = _remoteClient!;
+            var summary = await Task.Run(() => client.ComputePendingAsync());
+
+            var report = BuildStatusReport();
+            report.PendingFiles = summary.Files;
+            report.PendingBytes = summary.Bytes;
+            report.PendingCheckedAt = DateTimeOffset.UtcNow;
+            report.PendingGames = summary.Games
+                .Select(g => new PendingGameDto(g.Name, g.Files, g.Bytes))
+                .ToList();
+            await agent.ReportAsync(report);
+            Console.WriteLine($"Pending check: {summary.Files} file(s) behind across {summary.Games.Count} game(s)");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Pending check failed: {ex.Message}");
+        }
+        finally { Interlocked.Exchange(ref _pendingCheckBusy, 0); }
+    }
 
     private void ReportAgentStatus(string state, string message, int done, int total, SyncProgress? p = null)
     {
@@ -2201,6 +2373,30 @@ public partial class MainWindow : Window
     }
 
     // Dashboard renders this with its own "v" prefix, so hand it the bare number.
+    /// <summary>
+    /// Reports the finished sync (which the server appends to this screen's
+    /// history) and then re-diffs, so "behind by N" reflects reality rather
+    /// than whatever the sync set out to do.
+    /// </summary>
+    private void ReportCompletedSync(SyncProgress result)
+    {
+        var agent = _agent;
+        if (agent == null) return;
+
+        var report = BuildStatusReport();
+        report.SyncState = result.FilesFailed > 0 ? "error" : "idle";
+        report.SyncMessage = result.Message ?? string.Empty;
+        report.SyncFilesDone = result.FilesDownloaded;
+        report.SyncFilesTotal = result.FilesTotal;
+        report.CompletedSync = new CompletedSyncDto(
+            result.FilesDownloaded,
+            result.BytesDownloaded,
+            result.FilesFailed,
+            result.Pending.Select(g => g.Name).Take(20).ToList());
+
+        _ = agent.ReportAsync(report).ContinueWith(_ => RefreshPendingAsync(), TaskScheduler.Default);
+    }
+
     private static string GetAppVersionString() => FormatVersion(GetLocalVersion()).TrimStart('v');
 
     private static bool HasVideoExtension(string path)
