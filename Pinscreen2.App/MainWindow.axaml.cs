@@ -58,6 +58,16 @@ public partial class MainWindow : Window
     private int _clockReplacements;
     private string _lastDisplayGeometry = string.Empty;
     private DateTimeOffset? _lastResolutionChangeAt;
+    private DispatcherTimer? _tailscaleTimer;
+    private int _tailscaleBusy;
+    private TailscaleHealth? _tailscaleHealth;
+    private int _tailscaleRecoveries;
+    private string _tailscaleLastAction = string.Empty;
+    private DateTimeOffset? _tailscaleLastActionAt;
+    private DateTimeOffset? _tailscaleLastRecovery;
+    // Long enough that a service restart gets a fair chance to settle before we
+    // conclude it failed and try again.
+    private static readonly TimeSpan TailscaleRecoveryCooldown = TimeSpan.FromMinutes(5);
     private bool _updateInProgress;
     private string _updateState = "idle";
     private string _updateMessage = string.Empty;
@@ -2317,6 +2327,15 @@ public partial class MainWindow : Window
             return tcs.Task;
         };
         _agent.CheckRequested = () => RefreshPendingAsync();
+        _agent.TailscaleRestartRequested = async () =>
+        {
+            var result = await TailscaleMonitor.RestartAsync();
+            _tailscaleLastAction = result;
+            _tailscaleLastActionAt = DateTimeOffset.UtcNow;
+            Console.WriteLine($"Tailscale restart (requested): {result}");
+            await Task.Delay(3000);
+            await RefreshTailscaleAsync(recover: false);
+        };
         _agent.RenameRequested = newName =>
         {
             var tcs = new TaskCompletionSource();
@@ -2354,6 +2373,20 @@ public partial class MainWindow : Window
             _pendingTimer.Tick += (_, __) => _ = RefreshPendingAsync();
         }
         _pendingTimer.Start();
+
+        // Tailscale watchdog. Deliberately independent of the server connection:
+        // on a screen that reaches the server over Tailscale, this is the only
+        // thing still running when the link goes down.
+        if (_config.WatchTailscale)
+        {
+            if (_tailscaleTimer == null)
+            {
+                _tailscaleTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+                _tailscaleTimer.Tick += (_, __) => _ = RefreshTailscaleAsync(recover: true);
+            }
+            _tailscaleTimer.Start();
+            _ = RefreshTailscaleAsync(recover: false);
+        }
 
         if (_statusTimer == null)
         {
@@ -2396,6 +2429,12 @@ public partial class MainWindow : Window
         UpdateMessage = _updateMessage,
         UpdatePercent = _updatePercent,
         IsElevated = UpdateService.IsElevated,
+        TailscaleInstalled = _tailscaleHealth?.Installed ?? false,
+        TailscaleHealthy = _tailscaleHealth?.IsHealthy ?? false,
+        TailscaleState = _tailscaleHealth?.Summary ?? "",
+        TailscaleRecoveries = _tailscaleRecoveries,
+        TailscaleLastAction = _tailscaleLastAction,
+        TailscaleLastActionAt = _tailscaleLastActionAt,
     };
 
     private string SafeGeometrySignature()
@@ -2616,6 +2655,47 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Samples Tailscale health and, when <paramref name="recover"/>, restarts it
+    /// if it has died. Rate-limited so a persistent failure retries rather than
+    /// spins, and so a machine that simply has no Tailscale never thrashes.
+    /// </summary>
+    private async Task RefreshTailscaleAsync(bool recover)
+    {
+        if (Interlocked.Exchange(ref _tailscaleBusy, 1) == 1) return;
+        try
+        {
+            var health = await TailscaleMonitor.CheckAsync();
+            _tailscaleHealth = health;
+
+            if (recover && health.Installed && !health.IsHealthy)
+            {
+                var since = _tailscaleLastRecovery == null
+                    ? TimeSpan.MaxValue
+                    : DateTimeOffset.UtcNow - _tailscaleLastRecovery.Value;
+                if (since >= TailscaleRecoveryCooldown)
+                {
+                    _tailscaleLastRecovery = DateTimeOffset.UtcNow;
+                    _tailscaleRecoveries++;
+                    Console.WriteLine($"Tailscale unhealthy ({health.Summary}); attempting recovery");
+                    var result = await TailscaleMonitor.TryRecoverAsync(health);
+                    _tailscaleLastAction = result;
+                    _tailscaleLastActionAt = DateTimeOffset.UtcNow;
+                    Console.WriteLine($"Tailscale recovery: {result}");
+
+                    await Task.Delay(5000);
+                    _tailscaleHealth = await TailscaleMonitor.CheckAsync();
+                }
+            }
+
+            // Best-effort: if Tailscale is the transport, this simply won't land
+            // until it comes back -- which is the point of recovering locally.
+            try { _ = _agent?.ReportAsync(BuildStatusReport()); } catch { }
+        }
+        catch (Exception ex) { Console.WriteLine($"Tailscale check failed: {ex.Message}"); }
+        finally { Interlocked.Exchange(ref _tailscaleBusy, 0); }
+    }
+
     private void ReportUpdateStatus(string state, string message, int percent)
     {
         _updateState = state;
@@ -2735,6 +2815,8 @@ public class AppConfig
     public string DeviceName { get; set; } = string.Empty;
     /// <summary>Sync automatically when the server pushes a sync command.</summary>
     public bool AutoSyncOnPush { get; set; } = true;
+    /// <summary>Watch Tailscale and restart it locally if it dies.</summary>
+    public bool WatchTailscale { get; set; } = true;
     // LibVLC video output module override. Empty = platform default
     // ("direct3d9" on Windows; let VLC pick elsewhere). Set to e.g.
     // "direct3d11", "wingdi", or "gl" to work around driver-specific crashes.

@@ -239,6 +239,16 @@ app.MapPost("/api/devices/update-all", () =>
     return Results.Ok(new { sent = n });
 });
 
+// Only reaches a screen that can still talk to us. A screen whose Tailscale is
+// already down has no transport for this -- its own watchdog covers that case.
+app.MapPost("/api/devices/{id}/tailscale-restart", (string id) =>
+{
+    var sent = devices.Send(id, "tailscale-restart", new { at = DateTimeOffset.UtcNow });
+    return sent
+        ? Results.Ok(new { sent = 1 })
+        : Results.Json(new { sent = 0, error = "device offline — it cannot be reached to be told" }, statusCode: 409);
+});
+
 app.MapDelete("/api/devices/{id}", (string id) =>
     devices.Forget(id) ? Results.Ok() : Results.NotFound());
 

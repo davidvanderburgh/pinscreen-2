@@ -61,6 +61,15 @@ public class DeviceStatusReport
     public int UpdatePercent { get; set; }
     /// <summary>False means a push update may stall on a UAC prompt nobody can click.</summary>
     public bool IsElevated { get; set; }
+
+    // Tailscale health, so a link that is about to strand a screen is visible
+    // before it does.
+    public bool TailscaleInstalled { get; set; }
+    public bool TailscaleHealthy { get; set; }
+    public string TailscaleState { get; set; } = "";
+    public int TailscaleRecoveries { get; set; }
+    public string TailscaleLastAction { get; set; } = "";
+    public DateTimeOffset? TailscaleLastActionAt { get; set; }
 }
 
 /// <summary>
@@ -104,6 +113,13 @@ public class DeviceAgent : IDisposable
 
     /// <summary>Raised when the server pushes an app-update command.</summary>
     public Func<Task>? UpdateRequested { get; set; }
+
+    /// <summary>
+    /// Raised when the dashboard asks for a Tailscale restart. Only reaches
+    /// screens still able to talk to the server -- a screen whose Tailscale is
+    /// already down relies on its own watchdog instead.
+    /// </summary>
+    public Func<Task>? TailscaleRestartRequested { get; set; }
 
     /// <summary>
     /// Raised when the dashboard renames this screen. Receives the new name so
@@ -216,6 +232,11 @@ public class DeviceAgent : IDisposable
                 {
                     Console.WriteLine("DeviceAgent: app update pushed by server");
                     Fire(UpdateRequested, "update", ct);
+                }
+                else if (string.Equals(evt, "tailscale-restart", StringComparison.Ordinal))
+                {
+                    Console.WriteLine("DeviceAgent: Tailscale restart pushed by server");
+                    Fire(TailscaleRestartRequested, "tailscale-restart", ct);
                 }
                 else if (string.Equals(evt, "rename", StringComparison.Ordinal))
                 {

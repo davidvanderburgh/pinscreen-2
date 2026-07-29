@@ -205,6 +205,13 @@ async function loadDevices() {
   el.innerHTML = list.map(d => {
     const cls = !d.online ? '' : d.syncState === 'syncing' ? 'syncing' : d.syncState === 'error' ? 'err' : 'on';
     const pct = d.syncFilesTotal > 0 ? Math.round(100 * d.syncFilesDone / d.syncFilesTotal) : 0;
+    // A screen that reaches us over Tailscale cannot report Tailscale being
+    // down -- it just goes offline. So while offline this is last-known state,
+    // and that is exactly the clue worth showing.
+    const ts = !d.tailscaleInstalled ? ''
+      : d.tailscaleHealthy
+        ? ` · <span class="ok-tag" title="Tailscale ${esc(d.tailscaleState)}${d.tailscaleRecoveries ? ` — restarted ${d.tailscaleRecoveries}× since launch` : ''}">TS ok${d.tailscaleRecoveries ? ` ·${d.tailscaleRecoveries}` : ''}</span>`
+        : ` · <span class="behind-tag" title="${esc(d.tailscaleLastAction || '')}">TS ${esc(d.tailscaleState || 'down')}</span>`;
     const display = d.displayGeometry
       ? ` · <span title="${esc(d.displayGeometry)}${d.clockReplacements ? ` — clock re-anchored ${d.clockReplacements}× since launch` : ''}${d.lastResolutionChangeAt ? `; last resolution change ${ago(d.lastResolutionChangeAt)}` : ''}">` +
         `🖵 ${esc(d.displayGeometry.split('|')[0] || '')}${d.clockReplacements ? ` ·${d.clockReplacements}` : ''}</span>`
@@ -217,7 +224,7 @@ async function loadDevices() {
       <span class="dot ${cls}"></span>
       <div>
         <div class="name"><span class="rename" data-rename="${esc(d.id)}" title="Click to rename this screen">${esc(d.name || d.id)}</span></div>
-        <div class="meta">${esc(meta)}${display}</div>
+        <div class="meta">${esc(meta)}${ts}${display}</div>
         ${updateBlock(d)}
         ${d.syncState === 'syncing'
           ? syncingBlock(d, pct)
@@ -230,6 +237,8 @@ async function loadDevices() {
         <button data-update="${esc(d.id)}" ${d.updateAvailable ? 'class="warn"' : ''} ${d.online ? '' : 'disabled'}
                 title="${d.updateAvailable ? 'Download and install the latest app on this screen' : 'This screen is on the latest version'}">Update</button>
         <button data-sync="${esc(d.id)}" ${d.online && needsSync(d) ? 'class="primary"' : ''} ${d.online ? '' : 'disabled'}>Sync</button>
+        ${d.tailscaleInstalled ? `<button data-ts="${esc(d.id)}" ${d.online ? '' : 'disabled'}
+          title="${d.online ? 'Restart the Tailscale service on this screen' : 'Offline — it cannot be reached to be told; its own watchdog handles this'}">Restart TS</button>` : ''}
         <button class="danger" data-forget="${esc(d.id)}" ${d.online ? 'disabled' : ''}>Forget</button>
       </div>
     </div>`;
@@ -377,8 +386,14 @@ $('#devices').addEventListener('click', async e => {
   const forget = e.target.closest('[data-forget]');
   const update = e.target.closest('[data-update]');
   const rename = e.target.closest('[data-rename]');
+  const ts = e.target.closest('[data-ts]');
   try {
-    if (rename) {
+    if (ts) {
+      if (!confirm('Restart the Tailscale service on this screen?\n\nIf this screen reaches the server over Tailscale, its connection will drop and come back.')) return;
+      e.target.disabled = true;
+      await api('/api/devices/' + encodeURIComponent(ts.dataset.ts) + '/tailscale-restart', { method: 'POST' });
+      toast('Restart sent.');
+    } else if (rename) {
       const id = rename.dataset.rename;
       const current = rename.textContent.trim();
       const next = prompt('Name for this pinscreen:', current);

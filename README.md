@@ -264,6 +264,37 @@ Check a screen's policy with:
 Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' ConsentPromptBehaviorAdmin
 ```
 
+### Tailscale watchdog
+
+Screens that reach the server over Tailscale are stranded when it dies —
+recovering one meant remoting in and starting it by hand.
+
+**The dashboard cannot fix this on its own, and it is worth being clear why.**
+A screen whose Tailscale is down has no path back to the server: it simply shows
+as offline, and a "restart Tailscale" command has no transport to arrive on. The
+transport *is* what broke. Remote control only helps a screen that is degraded
+but still reachable, or one on the LAN.
+
+So the recovery runs on the screen. Every 60 seconds the app checks:
+
+- `tailscale status --json` — backend state and whether this node is online
+- whether `tailscaled` and `tailscale-ipn` are running
+
+Status queries need no elevation. When it finds Tailscale down it climbs a
+recovery ladder, cheapest first, and reports which rung worked:
+
+1. **Tray gone, daemon alive** → relaunch `tailscale-ipn.exe`. No admin needed.
+2. **Daemon down** → `sc start Tailscale`. Needs admin; reports "needs admin" on
+   access denied rather than failing silently.
+3. **Daemon up but backend stopped** → `tailscale up`.
+
+Attempts are rate-limited to one per 5 minutes so a persistent failure retries
+rather than spins. Disable with `WatchTailscale: false`.
+
+The dashboard shows `TS ok` or `TS <state>` per screen, with a restart count, and
+a **Restart TS** button for screens still reachable. While a screen is offline
+those values are its *last known* state — which is itself the clue.
+
 ### How screens receive updates
 
 Each screen holds a Server-Sent Events connection to `/events`. The server

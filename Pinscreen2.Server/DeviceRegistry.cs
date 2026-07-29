@@ -72,6 +72,16 @@ public class DeviceRecord
     /// <summary>Computed per request from the release watcher, not persisted.</summary>
     public bool UpdateAvailable { get; set; }
 
+    // Tailscale health as last reported. Note a screen that reaches us over
+    // Tailscale simply goes offline when it breaks -- these values are then the
+    // last known state, not the current one.
+    public bool TailscaleInstalled { get; set; }
+    public bool TailscaleHealthy { get; set; }
+    public string TailscaleState { get; set; } = "";
+    public int TailscaleRecoveries { get; set; }
+    public string TailscaleLastAction { get; set; } = "";
+    public DateTimeOffset? TailscaleLastActionAt { get; set; }
+
     /// <summary>
     /// Live connection state. Also lands in devices.json, which is harmless --
     /// <see cref="DeviceRegistry.Load"/> forces it false on startup.
@@ -128,6 +138,12 @@ public class DeviceStatusDto
     public string? UpdateMessage { get; set; }
     public int UpdatePercent { get; set; }
     public bool IsElevated { get; set; }
+    public bool TailscaleInstalled { get; set; }
+    public bool TailscaleHealthy { get; set; }
+    public string? TailscaleState { get; set; }
+    public int TailscaleRecoveries { get; set; }
+    public string? TailscaleLastAction { get; set; }
+    public DateTimeOffset? TailscaleLastActionAt { get; set; }
 }
 
 /// <summary>One live SSE connection to a pinscreen.</summary>
@@ -273,6 +289,12 @@ public class DeviceRegistry
         if (!string.IsNullOrWhiteSpace(dto.DisplayGeometry)) rec.DisplayGeometry = dto.DisplayGeometry!;
         if (dto.LastResolutionChangeAt != null) rec.LastResolutionChangeAt = dto.LastResolutionChangeAt;
         rec.IsElevated = dto.IsElevated;
+        rec.TailscaleInstalled = dto.TailscaleInstalled;
+        rec.TailscaleHealthy = dto.TailscaleHealthy;
+        if (!string.IsNullOrWhiteSpace(dto.TailscaleState)) rec.TailscaleState = dto.TailscaleState!;
+        rec.TailscaleRecoveries = dto.TailscaleRecoveries;
+        if (!string.IsNullOrWhiteSpace(dto.TailscaleLastAction)) rec.TailscaleLastAction = dto.TailscaleLastAction!;
+        if (dto.TailscaleLastActionAt != null) rec.TailscaleLastActionAt = dto.TailscaleLastActionAt;
         if (!string.IsNullOrWhiteSpace(dto.UpdateState))
         {
             rec.UpdateState = dto.UpdateState!;
