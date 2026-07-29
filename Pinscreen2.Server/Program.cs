@@ -96,7 +96,7 @@ var refreshTimer = new System.Threading.Timer(_ => RefreshAndMaybePush("library-
 // Which app version is available, so the dashboard can flag out-of-date screens.
 _ = releases.RefreshAsync();
 var releaseTimer = new System.Threading.Timer(_ => _ = releases.RefreshAsync(), null,
-    TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30));
+    TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(15));
 
 // Notification-area icon. Skipped for headless/service runs, where there is no
 // desktop to attach to.
@@ -211,7 +211,13 @@ app.MapGet("/api/devices", () =>
     return Results.Json(list, jsonOpts);
 });
 
-app.MapGet("/api/release", () => Results.Json(releases.Current, jsonOpts));
+app.MapGet("/api/release", async () =>
+{
+    // Refresh on read when stale. The background timer alone left the dashboard
+    // advertising a version two releases behind.
+    await releases.EnsureFreshAsync(TimeSpan.FromMinutes(5));
+    return Results.Json(releases.Current, jsonOpts);
+});
 
 app.MapPost("/api/release/refresh", async () =>
 {

@@ -18,6 +18,9 @@ public class ReleaseWatcher
 
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(20) };
     private readonly object _gate = new();
+    // One refresh at a time: several dashboard tabs polling must not turn into
+    // several concurrent GitHub calls.
+    private readonly SemaphoreSlim _refreshLock = new(1, 1);
 
     private string _latestTag = "";
     private Version? _latestVersion;
@@ -45,6 +48,31 @@ public class ReleaseWatcher
     /// <summary>Latest version, or null when unknown. Used to flag out-of-date screens.</summary>
     public Version? LatestVersion { get { lock (_gate) return _latestVersion; } }
 
+    /// <summary>
+    /// Refreshes only if the cached answer is older than <paramref name="maxAge"/>.
+    ///
+    /// The dashboard reads this on every load, so a plain background timer left
+    /// it showing a version two releases behind. Unauthenticated GitHub allows
+    /// 60 calls an hour and this costs one per maxAge window, so a short TTL is
+    /// affordable and a stale banner is not.
+    /// </summary>
+    public async Task EnsureFreshAsync(TimeSpan maxAge)
+    {
+        DateTimeOffset? checkedAt;
+        lock (_gate) checkedAt = _checkedAt;
+        if (checkedAt != null && DateTimeOffset.UtcNow - checkedAt.Value < maxAge) return;
+
+        if (!await _refreshLock.WaitAsync(0)) return; // a refresh is already running
+        try
+        {
+            // Re-check under the lock: the waiter we skipped may have just landed.
+            lock (_gate) checkedAt = _checkedAt;
+            if (checkedAt != null && DateTimeOffset.UtcNow - checkedAt.Value < maxAge) return;
+            await RefreshAsync();
+        }
+        finally { _refreshLock.Release(); }
+    }
+
     public async Task RefreshAsync()
     {
         try
@@ -69,15 +97,18 @@ public class ReleaseWatcher
                 }
             }
 
+            string previous;
             lock (_gate)
             {
+                previous = _latestTag;
                 _latestTag = tag;
                 _latestVersion = ParseVersion(tag);
                 _hasInstaller = hasInstaller;
                 _checkedAt = DateTimeOffset.UtcNow;
                 _error = "";
             }
-            Console.WriteLine($"Latest release: {tag}{(hasInstaller ? "" : " (installer not uploaded yet)")}");
+            if (!string.Equals(previous, tag, StringComparison.Ordinal))
+                Console.WriteLine($"Latest release: {tag}{(hasInstaller ? "" : " (installer not uploaded yet)")}");
         }
         catch (Exception ex)
         {

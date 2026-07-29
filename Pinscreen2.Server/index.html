@@ -105,7 +105,7 @@
   <section>
     <div class="sec-head">
       <h2>Pinscreens</h2>
-      <span id="releaseInfo" class="root"></span>
+      <span id="releaseInfo" class="root" title="Click to check GitHub now" style="cursor:pointer"></span>
       <span class="spacer"></span>
       <button id="updateAll" title="Tell every out-of-date screen to download and install the latest app">Update all</button>
       <button id="checkAll" title="Ask every screen to re-compare itself against the library">Re-check all</button>
@@ -182,14 +182,17 @@ $('#devices').addEventListener('toggle', e => {
   else expandedIncoming.delete(el.dataset.dev);
 }, true);
 
-async function loadRelease() {
+async function loadRelease(force) {
   try {
-    const r = await api('/api/release');
+    const r = await api(force ? '/api/release/refresh' : '/api/release', force ? { method: 'POST' } : undefined);
     $('#releaseInfo').textContent = r.error
       ? 'release check failed'
       : r.tag ? `latest app ${r.tag}${r.hasInstaller ? '' : ' (installer uploading…)'}` : '';
+    if (force) { toast(r.tag ? `Latest release: ${r.tag}` : 'Release check failed.'); refresh(); }
   } catch { $('#releaseInfo').textContent = ''; }
 }
+
+$('#releaseInfo').addEventListener('click', () => loadRelease(true));
 
 async function loadDevices() {
   const list = await api('/api/devices');
