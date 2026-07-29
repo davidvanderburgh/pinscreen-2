@@ -187,7 +187,8 @@ async function loadDevices() {
     const cls = !d.online ? '' : d.syncState === 'syncing' ? 'syncing' : d.syncState === 'error' ? 'err' : 'on';
     const pct = d.syncFilesTotal > 0 ? Math.round(100 * d.syncFilesDone / d.syncFilesTotal) : 0;
     const display = d.displayGeometry
-      ? ` · <span title="Display geometry the clock is anchored to${d.clockReplacements ? `; re-anchored ${d.clockReplacements}× since launch` : ''}">🖵 ${esc((d.displayGeometry.split('|')[0] || '').replace(/\.\d+/g, ''))}${d.clockReplacements ? ` ·${d.clockReplacements}` : ''}</span>`
+      ? ` · <span title="${esc(d.displayGeometry)}${d.clockReplacements ? ` — clock re-anchored ${d.clockReplacements}× since launch` : ''}${d.lastResolutionChangeAt ? `; last resolution change ${ago(d.lastResolutionChangeAt)}` : ''}">` +
+        `🖵 ${esc(d.displayGeometry.split('|')[0] || '')}${d.clockReplacements ? ` ·${d.clockReplacements}` : ''}</span>`
       : '';
     const meta = d.online
       ? `${d.cachedFiles.toLocaleString()} videos cached · ${bytes(d.cachedBytes)} · ${bytes(d.freeBytes)} free` +

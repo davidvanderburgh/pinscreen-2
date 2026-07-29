@@ -196,12 +196,27 @@ sleep/wake usually drops and re-adds the display, resizing the main window; the
 offset, so the clock sits at correct coordinates inside a stale window.
 
 That is why adjusting the positioning maths never fixed it — the maths was never
-wrong. `EnsureClockPlacement` samples a geometry signature on the existing
-1-second clock timer and, when it changes and then holds for one tick, closes and
-reopens the popup to force Avalonia to re-place it. Sampling rather than
-subscribing is deliberate: display events arrive in bursts during a wake, and
-reacting to each is what caused the hangs that moved clock updates onto a timer
-in the first place.
+wrong.
+
+The trigger is a **resolution change**: turning a monitor off usually drops it
+from the display topology, Windows falls back to a low mode, and on wake it
+returns to the real one. `EnsureClockPlacement` samples a `DisplayGeometry` on
+the existing 1-second clock timer — display mode, scaling, client size, root
+size, window state — and when it changes and then holds for one tick it:
+
+1. re-asserts fullscreen if the mode changed and the window is still sized to
+   the old one (Windows leaves windows flagged fullscreen at a stale size, and
+   anchoring the popup to those bounds is exactly how the clock ends up
+   off-centre), then
+2. closes and reopens the popup so Avalonia re-places it against current bounds.
+
+Sampling rather than subscribing is deliberate: display events arrive in bursts
+during a wake, and reacting to each is what caused the hangs that moved clock
+updates onto a timer in the first place.
+
+The decision rules live in `DisplayGeometry` — separate from the window so they
+can be tested directly against the sequences a real sleep/wake produces (steady
+state, fallback mode, stale window after wake, DPI-only change, unknown screen).
 
 The app is a `WinExe` with no console, so each re-anchor is reported to the
 dashboard as a counter next to the screen's display geometry (`🖵 1920x1080 ·3`).

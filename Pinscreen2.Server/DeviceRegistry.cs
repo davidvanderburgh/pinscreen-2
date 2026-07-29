@@ -54,6 +54,7 @@ public class DeviceRecord
     /// </summary>
     public int ClockReplacements { get; set; }
     public string DisplayGeometry { get; set; } = "";
+    public DateTimeOffset? LastResolutionChangeAt { get; set; }
 
     /// <summary>
     /// Live connection state. Also lands in devices.json, which is harmless --
@@ -106,6 +107,7 @@ public class DeviceStatusDto
     public CompletedSyncDto? CompletedSync { get; set; }
     public int ClockReplacements { get; set; }
     public string? DisplayGeometry { get; set; }
+    public DateTimeOffset? LastResolutionChangeAt { get; set; }
 }
 
 /// <summary>One live SSE connection to a pinscreen.</summary>
@@ -232,6 +234,7 @@ public class DeviceRegistry
         rec.SyncFile = dto.SyncFile ?? "";
         rec.ClockReplacements = dto.ClockReplacements;
         if (!string.IsNullOrWhiteSpace(dto.DisplayGeometry)) rec.DisplayGeometry = dto.DisplayGeometry!;
+        if (dto.LastResolutionChangeAt != null) rec.LastResolutionChangeAt = dto.LastResolutionChangeAt;
 
         // Null means the report didn't measure the diff, so keep what we had.
         // An empty list is a positive "up to date" and must overwrite.

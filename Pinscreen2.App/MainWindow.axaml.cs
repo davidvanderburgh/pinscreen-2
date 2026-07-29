@@ -52,6 +52,7 @@ public partial class MainWindow : Window
     private DispatcherTimer? _pendingTimer;
     private int _clockReplacements;
     private string _lastDisplayGeometry = string.Empty;
+    private DateTimeOffset? _lastResolutionChangeAt;
     // Library totals from the last playlist build, so the status heartbeat
     // doesn't have to re-stat 30k files every 30 seconds.
     private int _libraryFileCount;
@@ -1454,37 +1455,40 @@ public partial class MainWindow : Window
         UpdateClock();
     }
 
-    private string _lastGeometrySignature = string.Empty;
-    private string _pendingGeometrySignature = string.Empty;
+    private DisplayGeometry _lastGeometry;
+    private DisplayGeometry _pendingGeometry;
     private bool _geometryTracked;
 
-    /// <summary>
-    /// Everything that, if it changes, invalidates where the clock popup was
-    /// placed. Sampled rather than subscribed to: a monitor wake changes these
-    /// several times in a burst, and reacting to each event is what caused the
-    /// hangs that moved clock updates onto a timer in the first place.
-    /// </summary>
-    private string CurrentGeometrySignature()
+    private DisplayGeometry CurrentGeometry()
     {
-        var sb = new System.Text.StringBuilder();
-        try { sb.Append(ClientSize.Width).Append('x').Append(ClientSize.Height); } catch { }
-        try
-        {
-            var root = this.FindControl<Grid>("RootGrid");
-            if (root != null) sb.Append('|').Append(root.Bounds.Width).Append('x').Append(root.Bounds.Height);
-        }
-        catch { }
-        try { sb.Append('|').Append(Position.X).Append(',').Append(Position.Y); } catch { }
-        try { sb.Append('|').Append(WindowState); } catch { }
+        double sw = 0, sh = 0, scaling = 0;
         try
         {
             var screen = Screens?.ScreenFromWindow(this);
             if (screen != null)
-                sb.Append('|').Append(screen.Bounds.Width).Append('x').Append(screen.Bounds.Height)
-                  .Append('@').Append(screen.Scaling);
+            {
+                sw = screen.Bounds.Width;
+                sh = screen.Bounds.Height;
+                scaling = screen.Scaling;
+            }
         }
         catch { }
-        return sb.ToString();
+
+        double cw = 0, ch = 0;
+        try { cw = ClientSize.Width; ch = ClientSize.Height; } catch { }
+
+        double rw = 0, rh = 0;
+        try
+        {
+            var root = this.FindControl<Grid>("RootGrid");
+            if (root != null) { rw = root.Bounds.Width; rh = root.Bounds.Height; }
+        }
+        catch { }
+
+        var state = WindowState.Normal;
+        try { state = WindowState; } catch { }
+
+        return new DisplayGeometry(sw, sh, scaling, cw, ch, rw, rh, state);
     }
 
     /// <summary>
@@ -1506,40 +1510,58 @@ public partial class MainWindow : Window
     /// </summary>
     private void EnsureClockPlacement()
     {
-        string signature;
-        try { signature = CurrentGeometrySignature(); }
+        DisplayGeometry current;
+        try { current = CurrentGeometry(); }
         catch { return; }
-
-        if (string.IsNullOrEmpty(signature)) return;
 
         // First observation establishes the baseline; nothing to correct yet.
         if (!_geometryTracked)
         {
             _geometryTracked = true;
-            _lastGeometrySignature = signature;
+            _lastGeometry = current;
+            _lastDisplayGeometry = current.ToString();
             return;
         }
 
-        if (signature == _lastGeometrySignature)
+        if (current.Equals(_lastGeometry))
         {
-            _pendingGeometrySignature = string.Empty;
+            _pendingGeometry = default;
             return;
         }
 
-        // Require the new geometry to hold for one tick. During a wake the size
-        // lands on several intermediate values, and re-placing on each of them
-        // both flickers and can settle against a value that is already stale.
-        if (signature != _pendingGeometrySignature)
+        // Require the new geometry to hold for one tick. A mode change lands on
+        // several intermediate values (and a display that is off may report a
+        // fallback mode entirely), so acting on each one both flickers and can
+        // settle against a value that is already stale.
+        if (!current.Equals(_pendingGeometry))
         {
-            _pendingGeometrySignature = signature;
+            _pendingGeometry = current;
             return;
         }
 
-        _lastGeometrySignature = signature;
-        _pendingGeometrySignature = string.Empty;
+        var previous = _lastGeometry;
+        _lastGeometry = current;
+        _pendingGeometry = default;
+
+        var resolutionChanged = current.ResolutionDiffers(previous);
 
         try
         {
+            // A resolution change is the usual trigger, and it can leave the
+            // window flagged fullscreen while still sized to the old mode. Fix
+            // the window before re-anchoring the popup to it, or the popup gets
+            // anchored to stale bounds and the clock lands off-centre again.
+            if (current.NeedsFullScreenReassert(previous))
+            {
+                Console.WriteLine($"Re-asserting fullscreen: window {current.ClientWidth:0}x{current.ClientHeight:0} " +
+                                  $"vs display {current.ScreenWidth:0}x{current.ScreenHeight:0}@{current.Scaling:0.##}");
+                WindowState = WindowState.Normal;
+                WindowState = WindowState.FullScreen;
+                // Re-measure after the state change rather than trusting the
+                // values we sampled a moment ago.
+                _lastGeometry = CurrentGeometry();
+            }
+
             var popup = ClockPopup;
             // A closed popup is re-placed when it next opens, so leave it alone.
             if (popup == null || !popup.IsOpen) return;
@@ -1560,9 +1582,10 @@ public partial class MainWindow : Window
             // these screens are wall-mounted, so this counter is the only way to
             // confirm from anywhere that a wake actually triggered a re-anchor.
             _clockReplacements++;
-            _lastDisplayGeometry = signature;
+            _lastDisplayGeometry = _lastGeometry.ToString();
+            if (resolutionChanged) _lastResolutionChangeAt = DateTimeOffset.UtcNow;
             _ = _agent?.ReportAsync(BuildStatusReport());
-            Console.WriteLine($"Clock popup re-placed for geometry {signature}");
+            Console.WriteLine($"Clock popup re-placed ({(resolutionChanged ? "resolution change" : "window change")}): {_lastDisplayGeometry}");
         }
         catch (Exception ex) { Console.WriteLine($"Clock re-placement failed: {ex.Message}"); }
     }
@@ -2309,11 +2332,12 @@ public partial class MainWindow : Window
         DisplayGeometry = string.IsNullOrEmpty(_lastDisplayGeometry)
             ? SafeGeometrySignature()
             : _lastDisplayGeometry,
+        LastResolutionChangeAt = _lastResolutionChangeAt,
     };
 
     private string SafeGeometrySignature()
     {
-        try { return CurrentGeometrySignature(); } catch { return string.Empty; }
+        try { return CurrentGeometry().ToString(); } catch { return string.Empty; }
     }
 
     /// <summary>

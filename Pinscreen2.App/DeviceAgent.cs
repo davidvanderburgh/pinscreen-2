@@ -51,6 +51,8 @@ public class DeviceStatusReport
     public int ClockReplacements { get; set; }
     /// <summary>Current display geometry signature, for diagnosing clock placement.</summary>
     public string DisplayGeometry { get; set; } = "";
+    /// <summary>When the display mode last actually changed (monitor wake, mode switch).</summary>
+    public DateTimeOffset? LastResolutionChangeAt { get; set; }
 }
 
 /// <summary>
