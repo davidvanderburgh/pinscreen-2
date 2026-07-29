@@ -83,6 +83,11 @@ public class DeviceRecord
     public string TailscaleLastAction { get; set; } = "";
     public DateTimeOffset? TailscaleLastActionAt { get; set; }
 
+    /// <summary>UI-thread stalls observed by the screen's own watchdog.</summary>
+    public int UiStalls { get; set; }
+    public double WorstUiStallSeconds { get; set; }
+    public DateTimeOffset? LastUiStallAt { get; set; }
+
     /// <summary>
     /// Live connection state. Also lands in devices.json, which is harmless --
     /// <see cref="DeviceRegistry.Load"/> forces it false on startup.
@@ -146,6 +151,9 @@ public class DeviceStatusDto
     public int TailscaleRecoveries { get; set; }
     public string? TailscaleLastAction { get; set; }
     public DateTimeOffset? TailscaleLastActionAt { get; set; }
+    public int UiStalls { get; set; }
+    public double WorstUiStallSeconds { get; set; }
+    public DateTimeOffset? LastUiStallAt { get; set; }
 }
 
 /// <summary>One live SSE connection to a pinscreen.</summary>
@@ -297,6 +305,9 @@ public class DeviceRegistry
         rec.TailscaleRecoveries = dto.TailscaleRecoveries;
         if (!string.IsNullOrWhiteSpace(dto.TailscaleLastAction)) rec.TailscaleLastAction = dto.TailscaleLastAction!;
         if (dto.TailscaleLastActionAt != null) rec.TailscaleLastActionAt = dto.TailscaleLastActionAt;
+        rec.UiStalls = dto.UiStalls;
+        rec.WorstUiStallSeconds = dto.WorstUiStallSeconds;
+        if (dto.LastUiStallAt != null) rec.LastUiStallAt = dto.LastUiStallAt;
         if (!string.IsNullOrWhiteSpace(dto.UpdateState))
         {
             rec.UpdateState = dto.UpdateState!;

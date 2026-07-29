@@ -58,6 +58,7 @@ public partial class MainWindow : Window
     private int _clockReplacements;
     private string _lastDisplayGeometry = string.Empty;
     private DateTimeOffset? _lastResolutionChangeAt;
+    private UiWatchdog? _uiWatchdog;
     private DispatcherTimer? _tailscaleTimer;
     private int _tailscaleBusy;
     private TailscaleHealth? _tailscaleHealth;
@@ -105,6 +106,13 @@ public partial class MainWindow : Window
 
     private async void InitializeAsync()
     {
+        // Before anything else: without this the app's own diagnostics go
+        // nowhere, which is how two hangs on this hardware ended up being
+        // reasoned about from a photo of a frozen clock.
+        AppLog.Install();
+        _uiWatchdog = new UiWatchdog();
+        _uiWatchdog.Start();
+
         var libVlcPath = GetLibVlcDirectory();
         try
         {
@@ -2437,6 +2445,9 @@ public partial class MainWindow : Window
         TailscaleRecoveries = _tailscaleRecoveries,
         TailscaleLastAction = _tailscaleLastAction,
         TailscaleLastActionAt = _tailscaleLastActionAt,
+        UiStalls = _uiWatchdog?.StallCount ?? 0,
+        WorstUiStallSeconds = Math.Round(_uiWatchdog?.WorstStallSeconds ?? 0, 1),
+        LastUiStallAt = _uiWatchdog?.LastStallAt,
     };
 
     private string SafeGeometrySignature()
@@ -2714,6 +2725,24 @@ public partial class MainWindow : Window
 
     private static string GetAppVersionString() => FormatVersion(GetLocalVersion()).TrimStart('v');
 
+    /// <summary>
+    /// Tears playback down on a worker thread. Never call MediaPlayer.Stop()
+    /// from the UI thread: it blocks until libvlc's threads have wound down, and
+    /// a slow or wedged video driver turns that into a frozen application.
+    /// </summary>
+    private Task StopPlaybackAsync()
+    {
+        var player = _mediaPlayer;
+        if (player == null) return Task.CompletedTask;
+        return Task.Run(() =>
+        {
+            try { player.Stop(); }
+            catch (Exception ex) { Console.WriteLine($"MediaPlayer.Stop failed: {ex.Message}"); }
+        });
+    }
+
+    private void StopPlaybackOffThread() => _ = StopPlaybackAsync();
+
     private static bool HasVideoExtension(string path)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
@@ -2726,7 +2755,7 @@ public partial class MainWindow : Window
 
         if (_playlist.Count == 0)
         {
-            try { _mediaPlayer?.Stop(); } catch { }
+            StopPlaybackOffThread();
             _ = BuildPlaylistAsync().ContinueWith(_ =>
             {
                 if (_playlist.Count > 0)
@@ -2743,7 +2772,13 @@ public partial class MainWindow : Window
 
         Dispatcher.UIThread.Post(async () =>
         {
-            try { _mediaPlayer?.Stop(); } catch { }
+            // Stop() is synchronous: it waits for libvlc's decoder and video
+            // output threads to tear down. On the Intel driver these boxes ship
+            // with -- the same one that forced wingdi and software decode -- that
+            // teardown can block for many seconds or wedge outright, and doing it
+            // here froze the whole UI mid-transition.
+            await StopPlaybackAsync();
+
             if (delay > TimeSpan.Zero)
             {
                 try { await Task.Delay(delay); } catch { }

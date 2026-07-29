@@ -72,6 +72,12 @@ public class DeviceStatusReport
     public int TailscaleRecoveries { get; set; }
     public string TailscaleLastAction { get; set; } = "";
     public DateTimeOffset? TailscaleLastActionAt { get; set; }
+
+    // UI-thread stalls. "Not responding" is otherwise invisible from anywhere
+    // except standing in front of the screen.
+    public int UiStalls { get; set; }
+    public double WorstUiStallSeconds { get; set; }
+    public DateTimeOffset? LastUiStallAt { get; set; }
 }
 
 /// <summary>

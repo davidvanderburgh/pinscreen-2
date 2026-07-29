@@ -264,6 +264,27 @@ Check a screen's policy with:
 Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' ConsentPromptBehaviorAdmin
 ```
 
+### Diagnosing a frozen screen
+
+The app is a `WinExe` with no console, so for a long time its `Console.WriteLine`
+output went nowhere and a hang could only be reasoned about from a photograph of
+a frozen clock. Two things fix that:
+
+- **`%LOCALAPPDATA%\Pinscreen2\app.log`** — rolling, 4 MB, one prior generation.
+- **A UI-thread watchdog.** A background thread pings the dispatcher every 5s;
+  if a ping goes unanswered for 15s it logs the stall, waits it out, and records
+  how long it actually lasted. Screens report the count and worst duration, and
+  the dashboard shows `⚠ N UI stalls`.
+
+The watchdog cannot unblock the UI thread — nothing outside it can. It turns
+"not responding" into a timestamped, measured event.
+
+**Never call `MediaPlayer.Stop()` from the UI thread.** It is synchronous and
+waits for libvlc's decoder and video-output threads to tear down; on the Intel
+driver these boxes ship with (the reason for `wingdi` and `--avcodec-hw=none`)
+that can block for many seconds. It ran on every video transition and froze the
+whole app mid-change. `StopPlaybackAsync` moves it to a worker thread.
+
 ### Tailscale watchdog
 
 Screens that reach the server over Tailscale are stranded when it dies —

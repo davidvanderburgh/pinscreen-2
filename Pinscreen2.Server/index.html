@@ -217,6 +217,9 @@ async function loadDevices() {
       : d.tailscaleHealthy
         ? ` · <span class="ok-tag" title="Tailscale ${esc(d.tailscaleState)}${d.tailscaleRecoveries ? ` — restarted ${d.tailscaleRecoveries}× since launch` : ''}">TS ok${d.tailscaleRecoveries ? ` ·${d.tailscaleRecoveries}` : ''}</span>`
         : ` · <span class="behind-tag" title="${esc(d.tailscaleLastAction || '')}">TS ${esc(d.tailscaleState || 'down')}</span>`;
+    const stalls = d.uiStalls
+      ? ` · <span class="behind-tag" title="Longest ${d.worstUiStallSeconds}s${d.lastUiStallAt ? `, most recent ${ago(d.lastUiStallAt)}` : ''} — the screen froze and recovered">⚠ ${d.uiStalls} UI stall${d.uiStalls === 1 ? '' : 's'}</span>`
+      : '';
     const display = d.displayGeometry
       ? ` · <span title="${esc(d.displayGeometry)}${d.clockReplacements ? ` — clock re-anchored ${d.clockReplacements}× since launch` : ''}${d.lastResolutionChangeAt ? `; last resolution change ${ago(d.lastResolutionChangeAt)}` : ''}">` +
         `🖵 ${esc(d.displayGeometry.split('|')[0] || '')}${d.clockReplacements ? ` ·${d.clockReplacements}` : ''}</span>`
@@ -229,7 +232,7 @@ async function loadDevices() {
       <span class="dot ${cls}"></span>
       <div>
         <div class="name"><span class="rename" data-rename="${esc(d.id)}" title="Click to rename this screen">${esc(d.name || d.id)}</span></div>
-        <div class="meta">${esc(meta)}${ts}${display}</div>
+        <div class="meta">${esc(meta)}${ts}${stalls}${display}</div>
         ${updateBlock(d)}
         ${d.syncState === 'syncing'
           ? syncingBlock(d, pct)
