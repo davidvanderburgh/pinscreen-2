@@ -45,6 +45,7 @@ Console.WriteLine($"Serving '{root}' on http://0.0.0.0:{port}");
 
 var library = new LibraryService(root);
 var devices = new DeviceRegistry(Path.Combine(exeDir, "devices.json"));
+var releases = new ReleaseWatcher();
 
 var builder = WebApplication.CreateBuilder();
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
@@ -54,6 +55,7 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 builder.Services.AddSingleton(library);
 builder.Services.AddSingleton(devices);
+builder.Services.AddSingleton(releases);
 var app = builder.Build();
 
 var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -90,6 +92,11 @@ bool RefreshAndMaybePush(string reason)
 
 var refreshTimer = new System.Threading.Timer(_ => RefreshAndMaybePush("library-changed"), null,
     TimeSpan.FromMinutes(cfg.RefreshMinutes), TimeSpan.FromMinutes(cfg.RefreshMinutes));
+
+// Which app version is available, so the dashboard can flag out-of-date screens.
+_ = releases.RefreshAsync();
+var releaseTimer = new System.Threading.Timer(_ => _ = releases.RefreshAsync(), null,
+    TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30));
 
 // Notification-area icon. Skipped for headless/service runs, where there is no
 // desktop to attach to.
@@ -197,10 +204,53 @@ app.MapGet("/api/library", () => Results.Json(library.Games(), jsonOpts));
 
 app.MapGet("/api/library/{game}", (string game) => Results.Json(library.GameFiles(Uri.UnescapeDataString(game)), jsonOpts));
 
-app.MapGet("/api/devices", () => Results.Json(devices.Snapshot(), jsonOpts));
+app.MapGet("/api/devices", () =>
+{
+    var list = devices.Snapshot();
+    foreach (var d in list) d.UpdateAvailable = releases.IsOutOfDate(d.Version);
+    return Results.Json(list, jsonOpts);
+});
+
+app.MapGet("/api/release", () => Results.Json(releases.Current, jsonOpts));
+
+app.MapPost("/api/release/refresh", async () =>
+{
+    await releases.RefreshAsync();
+    return Results.Json(releases.Current, jsonOpts);
+});
+
+// Tell screens to update themselves: they check GitHub, download the installer,
+// verify it, and run it silently. Only reaches screens that are online.
+app.MapPost("/api/devices/{id}/update", (string id) =>
+{
+    var sent = devices.Send(id, "update", new { reason = "manual", at = DateTimeOffset.UtcNow });
+    return sent ? Results.Ok(new { sent = 1 }) : Results.Json(new { sent = 0, error = "device offline" }, statusCode: 409);
+});
+
+app.MapPost("/api/devices/update-all", () =>
+{
+    var n = devices.Broadcast("update", new { reason = "manual-all", at = DateTimeOffset.UtcNow });
+    return Results.Ok(new { sent = n });
+});
 
 app.MapDelete("/api/devices/{id}", (string id) =>
     devices.Forget(id) ? Results.Ok() : Results.NotFound());
+
+app.MapPost("/api/devices/{id}/name", async (string id, HttpContext ctx) =>
+{
+    var dto = await JsonSerializer.DeserializeAsync<RenameDto>(ctx.Request.Body, jsonOpts);
+    var name = (dto?.Name ?? "").Trim();
+    if (name.Length > 60) name = name[..60];
+
+    var rec = devices.Rename(id, name);
+    if (rec == null) return Results.NotFound();
+
+    // Push it to the screen so it persists the name in its own config; the
+    // server-side override covers the case where it is offline right now.
+    devices.Send(id, "rename", new { name = rec.Name });
+    Console.WriteLine($"Device {id} renamed to '{rec.Name}'");
+    return Results.Ok(new { name = rec.Name });
+});
 
 app.MapPost("/api/devices/{id}/sync", (string id) =>
 {
@@ -264,4 +314,5 @@ app.MapGet("/favicon.ico", () =>
 app.Run();
 tray?.Dispose();
 GC.KeepAlive(refreshTimer);
+GC.KeepAlive(releaseTimer);
 return 0;

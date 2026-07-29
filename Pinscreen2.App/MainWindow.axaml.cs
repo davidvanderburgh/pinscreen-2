@@ -53,6 +53,10 @@ public partial class MainWindow : Window
     private int _clockReplacements;
     private string _lastDisplayGeometry = string.Empty;
     private DateTimeOffset? _lastResolutionChangeAt;
+    private bool _updateInProgress;
+    private string _updateState = "idle";
+    private string _updateMessage = string.Empty;
+    private int _updatePercent;
     // Library totals from the last playlist build, so the status heartbeat
     // doesn't have to re-stat 30k files every 30 seconds.
     private int _libraryFileCount;
@@ -2285,6 +2289,33 @@ public partial class MainWindow : Window
             return tcs.Task;
         };
         _agent.CheckRequested = () => RefreshPendingAsync();
+        _agent.RenameRequested = newName =>
+        {
+            var tcs = new TaskCompletionSource();
+            Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    _config.DeviceName = newName;
+                    SaveConfig();
+                    Console.WriteLine($"Device renamed to '{newName}'");
+                    _ = _agent?.ReportAsync(BuildStatusReport());
+                    tcs.TrySetResult();
+                }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            });
+            return tcs.Task;
+        };
+        _agent.UpdateRequested = () =>
+        {
+            var tcs = new TaskCompletionSource();
+            Dispatcher.UIThread.Post(async () =>
+            {
+                try { await RunPushedUpdateAsync(); tcs.TrySetResult(); }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            });
+            return tcs.Task;
+        };
         _agent.Start();
 
         // Backstop for anything the push channel misses -- files curated into
@@ -2333,6 +2364,10 @@ public partial class MainWindow : Window
             ? SafeGeometrySignature()
             : _lastDisplayGeometry,
         LastResolutionChangeAt = _lastResolutionChangeAt,
+        UpdateState = _updateState,
+        UpdateMessage = _updateMessage,
+        UpdatePercent = _updatePercent,
+        IsElevated = UpdateService.IsElevated,
     };
 
     private string SafeGeometrySignature()
@@ -2419,6 +2454,102 @@ public partial class MainWindow : Window
             result.Pending.Select(g => g.Name).Take(20).ToList());
 
         _ = agent.ReportAsync(report).ContinueWith(_ => RefreshPendingAsync(), TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Applies a server-pushed app update: check, download, verify, install,
+    /// exit. The installer relaunches us via /RELAUNCH=1.
+    ///
+    /// Every step reports to the dashboard, because these screens are wall
+    /// mounted and unattended -- if the update stalls, the failure has to be
+    /// visible from somewhere other than in front of the screen.
+    /// </summary>
+    private async Task RunPushedUpdateAsync()
+    {
+        if (_updateInProgress) return;
+
+        // Replacing the app's files mid-sync would abort the sync and leave
+        // half-written videos behind. The push can be repeated afterwards.
+        if (_isSyncing)
+        {
+            ReportUpdateStatus("error", "Busy syncing; update skipped.", 0);
+            return;
+        }
+
+        _updateInProgress = true;
+        try
+        {
+            ReportUpdateStatus("checking", "Checking for updates…", 0);
+            var info = await UpdateService.CheckAsync(GetLocalVersion());
+
+            if (!info.IsNewer)
+            {
+                ReportUpdateStatus("uptodate", $"Already on the latest version ({GetAppVersionString()}).", 0);
+                return;
+            }
+            if (info.Installer == null)
+            {
+                ReportUpdateStatus("error", $"{info.Tag} has no Windows installer asset yet.", 0);
+                return;
+            }
+
+            var target = FormatVersion(info.Latest).TrimStart('v');
+            ReportUpdateStatus("downloading", $"Downloading {target}…", 0);
+
+            var lastReported = -1;
+            var progress = new Progress<(long done, long total)>(p =>
+            {
+                var pct = p.total > 0 ? (int)(100 * p.done / p.total) : 0;
+                // Throttle: this posts to the server, not just to a local UI.
+                if (pct >= lastReported + 5)
+                {
+                    lastReported = pct;
+                    ReportUpdateStatus("downloading",
+                        $"Downloading {target}… {UpdateService.FormatBytes(p.done)} of {UpdateService.FormatBytes(p.total)}", pct);
+                }
+            });
+
+            var path = await UpdateService.DownloadAsync(info.Installer, progress);
+
+            ReportUpdateStatus("installing",
+                UpdateService.IsElevated
+                    ? $"Installing {target}…"
+                    : $"Installing {target}… (needs elevation; will stall if this screen prompts for UAC)", 100);
+
+            UpdateService.LaunchInstaller(path);
+
+            // If the installer took hold it closes us and relaunches. Still
+            // being alive well after that means it never started -- almost
+            // always an unanswered UAC prompt on an unattended screen. Say so
+            // instead of sitting on "installing" forever.
+            _ = Task.Delay(TimeSpan.FromMinutes(2)).ContinueWith(_ =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!_updateInProgress) return;
+                    ReportUpdateStatus("error",
+                        "Installer did not take effect after 2 minutes — likely waiting on a UAC prompt.", 100);
+                    _updateInProgress = false;
+                });
+            }, TaskScheduler.Default);
+
+            await Task.Delay(1500);
+            Close();
+        }
+        catch (Exception ex)
+        {
+            ReportUpdateStatus("error", $"Update failed: {ex.Message}", 0);
+            _updateInProgress = false;
+        }
+    }
+
+    private void ReportUpdateStatus(string state, string message, int percent)
+    {
+        _updateState = state;
+        _updateMessage = message;
+        _updatePercent = percent;
+        Console.WriteLine($"Update [{state}] {message}");
+        try { _ = _agent?.ReportAsync(BuildStatusReport()); } catch { }
     }
 
     private static string GetAppVersionString() => FormatVersion(GetLocalVersion()).TrimStart('v');

@@ -53,6 +53,14 @@ public class DeviceStatusReport
     public string DisplayGeometry { get; set; } = "";
     /// <summary>When the display mode last actually changed (monitor wake, mode switch).</summary>
     public DateTimeOffset? LastResolutionChangeAt { get; set; }
+
+    // App-update progress for a server-pushed update.
+    /// <summary>idle | checking | downloading | installing | error | uptodate</summary>
+    public string UpdateState { get; set; } = "idle";
+    public string UpdateMessage { get; set; } = "";
+    public int UpdatePercent { get; set; }
+    /// <summary>False means a push update may stall on a UAC prompt nobody can click.</summary>
+    public bool IsElevated { get; set; }
 }
 
 /// <summary>
@@ -93,6 +101,16 @@ public class DeviceAgent : IDisposable
     /// itself so the dashboard knows whether it is behind.
     /// </summary>
     public Func<Task>? CheckRequested { get; set; }
+
+    /// <summary>Raised when the server pushes an app-update command.</summary>
+    public Func<Task>? UpdateRequested { get; set; }
+
+    /// <summary>
+    /// Raised when the dashboard renames this screen. Receives the new name so
+    /// the app can persist it -- otherwise the next heartbeat would report the
+    /// machine name again.
+    /// </summary>
+    public Func<string, Task>? RenameRequested { get; set; }
 
     /// <summary>Called to build the periodic status heartbeat.</summary>
     public Func<DeviceStatusReport>? StatusProvider { get; set; }
@@ -194,8 +212,40 @@ public class DeviceAgent : IDisposable
                     Console.WriteLine("DeviceAgent: library changed, re-checking");
                     Fire(CheckRequested, "check", ct);
                 }
+                else if (string.Equals(evt, "update", StringComparison.Ordinal))
+                {
+                    Console.WriteLine("DeviceAgent: app update pushed by server");
+                    Fire(UpdateRequested, "update", ct);
+                }
+                else if (string.Equals(evt, "rename", StringComparison.Ordinal))
+                {
+                    var name = ReadStringField(line["data:".Length..].Trim(), "name");
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        Console.WriteLine($"DeviceAgent: renamed to '{name}' by server");
+                        var handler = RenameRequested;
+                        if (handler != null)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                try { await handler(name!); }
+                                catch (Exception ex) { Console.WriteLine($"DeviceAgent: rename handler failed: {ex.Message}"); }
+                            }, ct);
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private static string? ReadStringField(string json, string field)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty(field, out var v) ? v.GetString() : null;
+        }
+        catch { return null; }
     }
 
     private static void Fire(Func<Task>? handler, string what, CancellationToken ct)

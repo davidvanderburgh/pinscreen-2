@@ -38,6 +38,8 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
   button.primary:hover:not(:disabled) { filter: brightness(1.1); color: #04121f; }
   button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+  button.warn { border-color: var(--warn); color: var(--warn); }
+  button.warn:hover:not(:disabled) { background: var(--warn); color: #1a1200; font-weight: 600; }
   .devices { display: grid; gap: 1px; background: var(--line); }
   .dev { background: var(--panel); padding: 14px 18px; display: grid;
          grid-template-columns: 12px 1fr auto; gap: 14px; align-items: center; }
@@ -46,6 +48,9 @@
   .dot.syncing { background: var(--accent); box-shadow: 0 0 0 3px rgba(74,163,255,.15); }
   .dot.err { background: var(--err); box-shadow: 0 0 0 3px rgba(248,81,73,.15); }
   .dev .name { font-weight: 600; }
+  .rename { cursor: text; border-bottom: 1px dashed transparent; }
+  .rename:hover { border-bottom-color: var(--dim); }
+  .rename:hover::after { content: ' ✎'; color: var(--dim); font-weight: 400; }
   .dev .meta { color: var(--dim); font-size: 12px; margin-top: 2px; }
   .dev .acts { display: flex; gap: 8px; }
   .bar { height: 4px; background: var(--panel2); border-radius: 2px; margin-top: 7px; overflow: hidden; }
@@ -100,7 +105,9 @@
   <section>
     <div class="sec-head">
       <h2>Pinscreens</h2>
+      <span id="releaseInfo" class="root"></span>
       <span class="spacer"></span>
+      <button id="updateAll" title="Tell every out-of-date screen to download and install the latest app">Update all</button>
       <button id="checkAll" title="Ask every screen to re-compare itself against the library">Re-check all</button>
       <button id="syncAll" class="primary">Push sync to all</button>
     </div>
@@ -175,6 +182,15 @@ $('#devices').addEventListener('toggle', e => {
   else expandedIncoming.delete(el.dataset.dev);
 }, true);
 
+async function loadRelease() {
+  try {
+    const r = await api('/api/release');
+    $('#releaseInfo').textContent = r.error
+      ? 'release check failed'
+      : r.tag ? `latest app ${r.tag}${r.hasInstaller ? '' : ' (installer uploading…)'}` : '';
+  } catch { $('#releaseInfo').textContent = ''; }
+}
+
 async function loadDevices() {
   const list = await api('/api/devices');
   const el = $('#devices');
@@ -197,8 +213,9 @@ async function loadDevices() {
     return `<div class="dev">
       <span class="dot ${cls}"></span>
       <div>
-        <div class="name">${esc(d.name || d.id)}</div>
+        <div class="name"><span class="rename" data-rename="${esc(d.id)}" title="Click to rename this screen">${esc(d.name || d.id)}</span></div>
         <div class="meta">${esc(meta)}${display}</div>
+        ${updateBlock(d)}
         ${d.syncState === 'syncing'
           ? syncingBlock(d, pct)
           : d.syncState === 'error'
@@ -207,6 +224,8 @@ async function loadDevices() {
         ${historyBlock(d)}
       </div>
       <div class="acts">
+        <button data-update="${esc(d.id)}" ${d.updateAvailable ? 'class="warn"' : ''} ${d.online ? '' : 'disabled'}
+                title="${d.updateAvailable ? 'Download and install the latest app on this screen' : 'This screen is on the latest version'}">Update</button>
         <button data-sync="${esc(d.id)}" ${d.online && needsSync(d) ? 'class="primary"' : ''} ${d.online ? '' : 'disabled'}>Sync</button>
         <button class="danger" data-forget="${esc(d.id)}" ${d.online ? 'disabled' : ''}>Forget</button>
       </div>
@@ -220,6 +239,25 @@ function esc(s) {
 }
 
 function needsSync(d) { return (d.pendingFiles || 0) > 0; }
+
+// App-update state. "installing" on an unelevated screen is the case worth
+// calling out: the installer needs admin, and a wall-mounted screen has nobody
+// to answer a UAC prompt, so it would otherwise just sit there.
+function updateBlock(d) {
+  const st = d.updateState || 'idle';
+  if (st === 'downloading' || st === 'checking' || st === 'installing') {
+    const warn = st === 'installing' && d.isElevated === false
+      ? ` <span style="color:var(--warn)">⚠ not elevated</span>` : '';
+    return `<div class="meta"><span style="color:var(--accent)">${esc(d.updateMessage || st)}</span>${warn}</div>` +
+           `<div class="bar"><i style="width:${d.updatePercent || 0}%"></i></div>`;
+  }
+  if (st === 'error') return `<div class="meta" style="color:var(--err)">${esc(d.updateMessage || 'Update failed')}</div>`;
+  if (d.updateAvailable) {
+    return `<div class="meta"><span class="behind-tag">update available</span>` +
+           (d.version ? ` <span style="opacity:.6">on v${esc(d.version)}</span>` : '') + `</div>`;
+  }
+  return '';
+}
 
 // Answers "do I need to press Sync?" without pressing it. Screens re-diff
 // themselves on connect, when the library changes, after every sync, and on a
@@ -334,8 +372,23 @@ $('#filter').addEventListener('input', renderGames);
 $('#devices').addEventListener('click', async e => {
   const sync = e.target.closest('[data-sync]');
   const forget = e.target.closest('[data-forget]');
+  const update = e.target.closest('[data-update]');
+  const rename = e.target.closest('[data-rename]');
   try {
-    if (sync) {
+    if (rename) {
+      const id = rename.dataset.rename;
+      const current = rename.textContent.trim();
+      const next = prompt('Name for this pinscreen:', current);
+      if (next === null || next.trim() === current) return;
+      const r = await api('/api/devices/' + encodeURIComponent(id) + '/name',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: next.trim() }) });
+      toast(`Renamed to “${r.name}”.`);
+    } else if (update) {
+      e.target.disabled = true;
+      await api('/api/devices/' + encodeURIComponent(update.dataset.update) + '/update', { method: 'POST' });
+      toast('Update pushed — the screen will restart itself.');
+    } else if (sync) {
       e.target.disabled = true;
       await api('/api/devices/' + encodeURIComponent(sync.dataset.sync) + '/sync', { method: 'POST' });
       toast('Sync pushed.');
@@ -352,6 +405,15 @@ $('#syncAll').addEventListener('click', async () => {
   try {
     const r = await api('/api/devices/sync-all', { method: 'POST' });
     toast(r.sent ? `Sync pushed to ${r.sent} screen${r.sent === 1 ? '' : 's'}.` : 'No screens are online.');
+  } catch (err) { toast('Failed: ' + err.message); }
+  refresh();
+});
+
+$('#updateAll').addEventListener('click', async () => {
+  if (!confirm('Push an app update to every online screen?\n\nEach will download the installer and restart itself. Screens already on the latest version do nothing.')) return;
+  try {
+    const r = await api('/api/devices/update-all', { method: 'POST' });
+    toast(r.sent ? `Update pushed to ${r.sent} screen${r.sent === 1 ? '' : 's'}.` : 'No screens are online.');
   } catch (err) { toast('Failed: ' + err.message); }
   refresh();
 });
@@ -380,7 +442,10 @@ async function refresh() {
 
 refresh();
 loadGames();
+loadRelease();
 setInterval(refresh, 3000);
+// The release only changes when something is published; no need to poll it fast.
+setInterval(loadRelease, 120000);
 </script>
 </body>
 </html>

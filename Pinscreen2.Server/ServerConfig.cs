@@ -1,5 +1,11 @@
 namespace Pinscreen2.Server;
 
+/// <summary>Body of <c>POST /api/devices/{id}/name</c>.</summary>
+public class RenameDto
+{
+    public string? Name { get; set; }
+}
+
 public class ServerConfig
 {
     public string Root { get; set; } = "";

@@ -208,6 +208,17 @@ public static class UpdateService
         return Version.TryParse(s, out var ver) ? ver : null;
     }
 
+    /// <summary>
+    /// Whether this process is already elevated. When it is not, launching the
+    /// installer relies on the machine's UAC policy elevating silently -- and a
+    /// wall-mounted kiosk has nobody to click a consent dialog, so the caller
+    /// surfaces this rather than letting a push update hang invisibly.
+    /// </summary>
+    public static bool IsElevated
+    {
+        get { try { return Environment.IsPrivilegedProcess; } catch { return false; } }
+    }
+
     public static string FormatBytes(long bytes)
     {
         string[] units = { "B", "KB", "MB", "GB" };

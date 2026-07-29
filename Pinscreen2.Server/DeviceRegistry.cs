@@ -13,6 +13,13 @@ public class DeviceRecord
 {
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
+
+    /// <summary>
+    /// The name was set from the dashboard, so it wins over whatever the device
+    /// reports. Without this the next status heartbeat would put the machine
+    /// name straight back.
+    /// </summary>
+    public bool NameIsCustom { get; set; }
     public string Version { get; set; } = "";
     public string Address { get; set; } = "";
     public DateTimeOffset FirstSeen { get; set; }
@@ -55,6 +62,15 @@ public class DeviceRecord
     public int ClockReplacements { get; set; }
     public string DisplayGeometry { get; set; } = "";
     public DateTimeOffset? LastResolutionChangeAt { get; set; }
+
+    // App-update progress for a server-pushed update.
+    public string UpdateState { get; set; } = "idle";
+    public string UpdateMessage { get; set; } = "";
+    public int UpdatePercent { get; set; }
+    /// <summary>False means a push update on this screen may stall on a UAC prompt.</summary>
+    public bool IsElevated { get; set; }
+    /// <summary>Computed per request from the release watcher, not persisted.</summary>
+    public bool UpdateAvailable { get; set; }
 
     /// <summary>
     /// Live connection state. Also lands in devices.json, which is harmless --
@@ -108,6 +124,10 @@ public class DeviceStatusDto
     public int ClockReplacements { get; set; }
     public string? DisplayGeometry { get; set; }
     public DateTimeOffset? LastResolutionChangeAt { get; set; }
+    public string? UpdateState { get; set; }
+    public string? UpdateMessage { get; set; }
+    public int UpdatePercent { get; set; }
+    public bool IsElevated { get; set; }
 }
 
 /// <summary>One live SSE connection to a pinscreen.</summary>
@@ -208,11 +228,27 @@ public class DeviceRegistry
     {
         var now = DateTimeOffset.UtcNow;
         var rec = _devices.GetOrAdd(id, _ => new DeviceRecord { Id = id, FirstSeen = now });
-        if (!string.IsNullOrWhiteSpace(name)) rec.Name = name!;
+        if (!rec.NameIsCustom && !string.IsNullOrWhiteSpace(name)) rec.Name = name!;
         if (!string.IsNullOrWhiteSpace(version)) rec.Version = version!;
         if (!string.IsNullOrWhiteSpace(address)) rec.Address = address!;
         if (string.IsNullOrWhiteSpace(rec.Name)) rec.Name = id;
         rec.LastSeen = now;
+        Save();
+        return rec;
+    }
+
+    /// <summary>
+    /// Renames a screen from the dashboard. Returns the record so the caller can
+    /// push the new name down to the device, which persists it in its own config
+    /// -- machine names like WIN-G47M6NUFE63 say nothing about which screen this
+    /// physically is.
+    /// </summary>
+    public DeviceRecord? Rename(string id, string name)
+    {
+        if (!_devices.TryGetValue(id, out var rec)) return null;
+        rec.Name = name.Trim();
+        rec.NameIsCustom = !string.IsNullOrWhiteSpace(rec.Name);
+        if (!rec.NameIsCustom) rec.Name = id;
         Save();
         return rec;
     }
@@ -222,7 +258,8 @@ public class DeviceRegistry
         if (!_devices.TryGetValue(id, out var rec))
             rec = Touch(id, dto.Name, dto.Version, address);
 
-        if (!string.IsNullOrWhiteSpace(dto.Name)) rec.Name = dto.Name!;
+        // A dashboard rename outranks whatever the device calls itself.
+        if (!rec.NameIsCustom && !string.IsNullOrWhiteSpace(dto.Name)) rec.Name = dto.Name!;
         if (!string.IsNullOrWhiteSpace(dto.Version)) rec.Version = dto.Version!;
         if (!string.IsNullOrWhiteSpace(address)) rec.Address = address!;
         rec.CachedFiles = dto.CachedFiles;
@@ -235,6 +272,13 @@ public class DeviceRegistry
         rec.ClockReplacements = dto.ClockReplacements;
         if (!string.IsNullOrWhiteSpace(dto.DisplayGeometry)) rec.DisplayGeometry = dto.DisplayGeometry!;
         if (dto.LastResolutionChangeAt != null) rec.LastResolutionChangeAt = dto.LastResolutionChangeAt;
+        rec.IsElevated = dto.IsElevated;
+        if (!string.IsNullOrWhiteSpace(dto.UpdateState))
+        {
+            rec.UpdateState = dto.UpdateState!;
+            rec.UpdateMessage = dto.UpdateMessage ?? "";
+            rec.UpdatePercent = dto.UpdatePercent;
+        }
 
         // Null means the report didn't measure the diff, so keep what we had.
         // An empty list is a positive "up to date" and must overwrite.

@@ -226,6 +226,44 @@ firing on a given screen.
 Device records persist in `devices.json` next to the exe, so a powered-off
 screen still appears in the list.
 
+Click a screen's name to rename it — `WIN-G47M6NUFE63` says nothing about which
+cabinet it is. The new name is pushed to the screen, which stores it in its own
+`DeviceName` config, and the server keeps an override so a heartbeat still
+reporting the machine name cannot revert it (and so renaming an offline screen
+sticks).
+
+### Pushing app updates from the dashboard
+
+The server polls GitHub for the latest release and flags screens running an
+older version. **Update** on a screen (or **Update all**) pushes an `update`
+command down the same SSE channel; the screen then checks, downloads the
+installer, verifies its sha256, runs it silently and restarts itself. Progress
+is reported back, so a push update is watchable from the dashboard.
+
+A screen already on the latest version does nothing. A screen mid-sync refuses
+and reports why — replacing the app's files mid-sync would abort it and leave
+half-written videos behind. Push again once it finishes.
+
+**Elevation is the catch.** The installer writes to Program Files and needs
+admin, but the app runs as `asInvoker`. Whether that is silent depends on the
+screen's UAC policy:
+
+- `ConsentPromptBehaviorAdmin = 0` (elevate without prompting) — silent, works
+  unattended.
+- Anything else — Windows raises a consent dialog, and a wall-mounted screen has
+  nobody to click it.
+
+Each screen reports whether it is elevated, and the dashboard marks an
+`⚠ not elevated` screen while it installs. If the installer has not taken effect
+two minutes after launch, the screen reports an error naming UAC as the likely
+cause, rather than sitting on "installing" forever.
+
+Check a screen's policy with:
+
+```powershell
+Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' ConsentPromptBehaviorAdmin
+```
+
 ### How screens receive updates
 
 Each screen holds a Server-Sent Events connection to `/events`. The server
