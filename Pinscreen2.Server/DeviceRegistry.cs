@@ -280,14 +280,23 @@ public class DeviceRegistry
             rec.UpdatePercent = dto.UpdatePercent;
         }
 
-        // Null means the report didn't measure the diff, so keep what we had.
-        // An empty list is a positive "up to date" and must overwrite.
-        if (dto.PendingGames != null)
+        // PendingCheckedAt is the marker that this report actually measured the
+        // diff. Only then are the counts authoritative -- an empty list with a
+        // timestamp is a positive "up to date" and must overwrite.
+        if (dto.PendingCheckedAt != null)
         {
-            rec.PendingGames = dto.PendingGames;
+            rec.PendingGames = dto.PendingGames ?? new List<PendingGame>();
             rec.PendingFiles = dto.PendingFiles;
             rec.PendingBytes = dto.PendingBytes;
-            rec.PendingCheckedAt = dto.PendingCheckedAt ?? DateTimeOffset.UtcNow;
+            rec.PendingCheckedAt = dto.PendingCheckedAt;
+        }
+        else if (dto.PendingGames != null)
+        {
+            // Sync-progress reports carry the sync's work list for the incoming
+            // display but measure nothing. Taking their zeroed counts as a
+            // measurement made a screen mid-sync read as "up to date, checked
+            // just now" while it was hundreds of files behind.
+            rec.PendingGames = dto.PendingGames;
         }
 
         if (dto.CompletedSync != null)
