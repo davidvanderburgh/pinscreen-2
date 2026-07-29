@@ -72,6 +72,7 @@ public partial class MainWindow : Window
     private string _updateState = "idle";
     private string _updateMessage = string.Empty;
     private int _updatePercent;
+    private DateTimeOffset? _updateStateAt;
     // Library totals from the last playlist build, so the status heartbeat
     // doesn't have to re-stat 30k files every 30 seconds.
     private int _libraryFileCount;
@@ -2428,6 +2429,7 @@ public partial class MainWindow : Window
         UpdateState = _updateState,
         UpdateMessage = _updateMessage,
         UpdatePercent = _updatePercent,
+        UpdateStateAt = _updateStateAt,
         IsElevated = UpdateService.IsElevated,
         TailscaleInstalled = _tailscaleHealth?.Installed ?? false,
         TailscaleHealthy = _tailscaleHealth?.IsHealthy ?? false,
@@ -2601,7 +2603,11 @@ public partial class MainWindow : Window
             }
             if (info.Installer == null)
             {
-                ReportUpdateStatus("error", $"{info.Tag} has no Windows installer asset yet.", 0);
+                // CI publishes the release row several minutes before the Inno
+                // installer finishes compressing and uploading, so this is
+                // routinely a transient race rather than a broken release.
+                ReportUpdateStatus("error",
+                    $"{info.Tag} installer is still uploading — try again in a few minutes.", 0);
                 return;
             }
 
@@ -2701,6 +2707,7 @@ public partial class MainWindow : Window
         _updateState = state;
         _updateMessage = message;
         _updatePercent = percent;
+        _updateStateAt = DateTimeOffset.UtcNow;
         Console.WriteLine($"Update [{state}] {message}");
         try { _ = _agent?.ReportAsync(BuildStatusReport()); } catch { }
     }

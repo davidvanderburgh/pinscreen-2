@@ -59,6 +59,8 @@ public class DeviceStatusReport
     public string UpdateState { get; set; } = "idle";
     public string UpdateMessage { get; set; } = "";
     public int UpdatePercent { get; set; }
+    /// <summary>When the state above was set, so the dashboard can age a stale error.</summary>
+    public DateTimeOffset? UpdateStateAt { get; set; }
     /// <summary>False means a push update may stall on a UAC prompt nobody can click.</summary>
     public bool IsElevated { get; set; }
 

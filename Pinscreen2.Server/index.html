@@ -182,9 +182,14 @@ $('#devices').addEventListener('toggle', e => {
   else expandedIncoming.delete(el.dataset.dev);
 }, true);
 
+// False while CI is still uploading the installer for the latest release. The
+// Update button must not offer a download that provably isn't there yet.
+let releaseReady = true;
+
 async function loadRelease(force) {
   try {
     const r = await api(force ? '/api/release/refresh' : '/api/release', force ? { method: 'POST' } : undefined);
+    releaseReady = !r.tag || r.hasInstaller !== false;
     $('#releaseInfo').textContent = r.error
       ? 'release check failed'
       : r.tag ? `latest app ${r.tag}${r.hasInstaller ? '' : ' (installer uploading…)'}` : '';
@@ -234,8 +239,11 @@ async function loadDevices() {
         ${historyBlock(d)}
       </div>
       <div class="acts">
-        <button data-update="${esc(d.id)}" ${d.updateAvailable ? 'class="warn"' : ''} ${d.online ? '' : 'disabled'}
-                title="${d.updateAvailable ? 'Download and install the latest app on this screen' : 'This screen is on the latest version'}">Update</button>
+        <button data-update="${esc(d.id)}" ${d.updateAvailable && releaseReady ? 'class="warn"' : ''}
+                ${d.online && (releaseReady || !d.updateAvailable) ? '' : 'disabled'}
+                title="${!releaseReady ? 'The installer for the latest release is still uploading — try again shortly'
+                        : d.updateAvailable ? 'Download and install the latest app on this screen'
+                        : 'This screen is on the latest version'}">Update</button>
         <button data-sync="${esc(d.id)}" ${d.online && needsSync(d) ? 'class="primary"' : ''} ${d.online ? '' : 'disabled'}>Sync</button>
         ${d.tailscaleInstalled ? `<button data-ts="${esc(d.id)}" ${d.online ? '' : 'disabled'}
           title="${d.online ? 'Restart the Tailscale service on this screen' : 'Offline — it cannot be reached to be told; its own watchdog handles this'}">Restart TS</button>` : ''}
@@ -263,7 +271,16 @@ function updateBlock(d) {
     return `<div class="meta"><span style="color:var(--accent)">${esc(d.updateMessage || st)}</span>${warn}</div>` +
            `<div class="bar"><i style="width:${d.updatePercent || 0}%"></i></div>`;
   }
-  if (st === 'error') return `<div class="meta" style="color:var(--err)">${esc(d.updateMessage || 'Update failed')}</div>`;
+  if (st === 'error') {
+    // An old failure is history, not an active alarm. The installer-still-
+    // uploading race in particular resolves on its own within minutes, and a
+    // permanently red line made a transient look like a broken release.
+    const ageMs = d.updateStateAt ? Date.now() - new Date(d.updateStateAt).getTime() : 0;
+    const stale = d.updateStateAt && ageMs > 10 * 60 * 1000;
+    return `<div class="meta" style="color:${stale ? 'var(--dim)' : 'var(--err)'}">` +
+           `${esc(d.updateMessage || 'Update failed')}` +
+           `${d.updateStateAt ? ` <span style="opacity:.7">(${ago(d.updateStateAt)}${stale ? ', retry available' : ''})</span>` : ''}</div>`;
+  }
   if (d.updateAvailable) {
     return `<div class="meta"><span class="behind-tag">update available</span>` +
            (d.version ? ` <span style="opacity:.6">on v${esc(d.version)}</span>` : '') + `</div>`;
@@ -428,6 +445,7 @@ $('#syncAll').addEventListener('click', async () => {
 });
 
 $('#updateAll').addEventListener('click', async () => {
+  if (!releaseReady) { toast('The installer for the latest release is still uploading — try again shortly.'); return; }
   if (!confirm('Push an app update to every online screen?\n\nEach will download the installer and restart itself. Screens already on the latest version do nothing.')) return;
   try {
     const r = await api('/api/devices/update-all', { method: 'POST' });

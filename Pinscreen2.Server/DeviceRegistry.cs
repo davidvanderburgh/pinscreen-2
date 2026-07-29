@@ -67,6 +67,7 @@ public class DeviceRecord
     public string UpdateState { get; set; } = "idle";
     public string UpdateMessage { get; set; } = "";
     public int UpdatePercent { get; set; }
+    public DateTimeOffset? UpdateStateAt { get; set; }
     /// <summary>False means a push update on this screen may stall on a UAC prompt.</summary>
     public bool IsElevated { get; set; }
     /// <summary>Computed per request from the release watcher, not persisted.</summary>
@@ -137,6 +138,7 @@ public class DeviceStatusDto
     public string? UpdateState { get; set; }
     public string? UpdateMessage { get; set; }
     public int UpdatePercent { get; set; }
+    public DateTimeOffset? UpdateStateAt { get; set; }
     public bool IsElevated { get; set; }
     public bool TailscaleInstalled { get; set; }
     public bool TailscaleHealthy { get; set; }
@@ -300,6 +302,7 @@ public class DeviceRegistry
             rec.UpdateState = dto.UpdateState!;
             rec.UpdateMessage = dto.UpdateMessage ?? "";
             rec.UpdatePercent = dto.UpdatePercent;
+            rec.UpdateStateAt = dto.UpdateStateAt ?? DateTimeOffset.UtcNow;
         }
 
         // PendingCheckedAt is the marker that this report actually measured the
