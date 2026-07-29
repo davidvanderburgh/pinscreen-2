@@ -9,16 +9,14 @@ permissions:
   contents: write
 
 jobs:
+  # Windows only -- the pinscreens are Windows kiosk boxes and nothing else
+  # consumes these builds.
   build:
     strategy:
       matrix:
         include:
           - runtime: win-x64
             os: windows-latest
-          - runtime: osx-arm64
-            os: macos-latest
-          - runtime: linux-x64
-            os: ubuntu-latest
 
     runs-on: ${{ matrix.os }}
 
@@ -59,15 +57,7 @@ jobs:
           -p:InformationalVersion=${{ steps.ver.outputs.version }}
           -o publish/${{ matrix.runtime }}
 
-      - name: Zip (Linux/macOS)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          cd publish/${{ matrix.runtime }}
-          zip -r ../../Pinscreen2-${{ matrix.runtime }}.zip .
-
-      - name: Zip (Windows)
-        if: runner.os == 'Windows'
+      - name: Zip
         shell: pwsh
         run: Compress-Archive -Path publish/${{ matrix.runtime }}/* -DestinationPath Pinscreen2-${{ matrix.runtime }}.zip
 

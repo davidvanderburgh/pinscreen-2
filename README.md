@@ -235,13 +235,41 @@ dotnet publish Pinscreen2.App -c Release -r linux-x64 --self-contained true -p:P
 
 Artifacts are under `Pinscreen2.App/bin/Release/<tfm>/<rid>/publish/`.
 
-## Releases and auto-update
+## Releases and one-click update
 
-The app pulls updates from this repo's GitHub Releases via the **Check for Updates…** button in the overlay. The release repo is hard-coded to `davidvanderburgh/pinscreen-2`.
+**Check for Updates…** in the overlay does the whole update: it asks GitHub for
+the latest release, downloads `Pinscreen2_Setup_v<version>_win-x64.exe`, verifies
+it against the sha256 GitHub publishes for the asset, runs it silently over the
+top, and the installer relaunches the app.
+
+The only prompt is the single UAC consent the installer needs to write to
+Program Files. Downloading the file in-app (rather than handing a URL to a
+browser) is deliberate: a browser-saved file carries the Mark-of-the-Web, so
+every release — a fresh unsigned binary with no reputation — would put a
+SmartScreen warning in front of a wall-mounted kiosk that usually has no
+keyboard.
+
+Requirements for this to work, all handled by the current build:
+
+- The release must carry the Inno Setup installer asset. `UpdateService` returns
+  "no installer" when it is missing, which also covers the window where the
+  release row exists but CI is still uploading — the button must never point at
+  a download that isn't there.
+- The install directory must stay stable across versions (`{autopf}\Pinscreen2`),
+  since the silent install lands over the existing one.
+- `pinscreen2.iss` must keep the `/RELAUNCH=1` handling; `[Run]` is
+  `skipifsilent`, so without it a silent update leaves a black screen.
+
+If a screen was ever updated by unzipping `Pinscreen2-win-x64.zip` over the
+install directory, its registry version will disagree with what it is actually
+running. The first installer-based update corrects that.
 
 ### Create a release via GitHub Actions (preferred)
 
-`.github/workflows/release.yml` triggers on any pushed `v*` tag and publishes win-x64 / osx-arm64 / linux-x64 zips to the matching release. The release must already exist when the workflow runs (it uploads with `gh release upload --clobber`), so use:
+`.github/workflows/release.yml` triggers on any pushed `v*` tag and publishes the
+win-x64 app zip, the Windows installer, and the server zip to the matching
+release. The release must already exist when the workflow runs (it uploads with
+`gh release upload --clobber`), so use:
 
 ```bash
 gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes "release notes here"
@@ -275,13 +303,19 @@ Or use the helper script:
 gh release create $ver .\Pinscreen2-win-x64.zip --title "Pinscreen 2 $ver" --notes "Release $ver"
 ```
 
-Naming tips:
-- Use zip filenames containing the target runtime/OS, e.g., `Pinscreen2-win-x64.zip`, `Pinscreen2-osx-arm64.zip`, `Pinscreen2-linux-x64.zip`.
-- Each zip should contain the published app AND `Pinscreen2.Updater(.exe)` in the same folder.
+### Release assets
 
-Updater behavior:
-- The app calls `https://api.github.com/repos/{UpdateGitHubRepo}/releases/latest`.
-- It picks a zip asset matching the current OS/architecture, downloads to a temp file, runs `Pinscreen2.Updater` to apply it, and relaunches.
+| Asset | What it is | When you want it |
+|---|---|---|
+| `Pinscreen2_Setup_v<ver>_win-x64.exe` | Inno Setup installer — installs to `C:\Program Files\Pinscreen2`, creates shortcuts, registers an uninstaller | **Normal path.** This is what in-app update downloads and runs. |
+| `Pinscreen2-win-x64.zip` | The same published app folder, zipped. No installer, no shortcuts, no uninstall entry. | Portable use, or inspecting the build. Extracting it over an installed copy leaves the registry version stale. |
+| `Pinscreen2-Server-win-x64.zip` | Published `Pinscreen2.Server` | Deploying the server somewhere you can't build from source (otherwise use `scripts/install-server.ps1`). |
+
+Both app assets carry identical payloads; the installer is smaller only because
+Inno uses lzma2/ultra64 solid compression where the zip uses Deflate.
+
+Builds are **Windows only** — the pinscreens are Windows kiosk boxes and nothing
+else consumes these artifacts.
 
 ## Notes
 

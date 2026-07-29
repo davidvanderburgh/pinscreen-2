@@ -49,6 +49,14 @@ installer/build/
 Pinscreen2.App/Assets/icon.ico
 Pinscreen2.App/Assets/icon.png
 
+# Preview render only. Pinscreen2.Server/favicon.ico is committed rather than
+# generated on demand: it is an EmbeddedResource, so a missing file is a hard
+# build failure rather than a cosmetic one.
+Pinscreen2.Server/favicon.png
+
+# Python bytecode from the icon generators
+__pycache__/
+
 # Claude Code per-user state (settings, scheduled task locks, etc.)
 # but keep tracked skills in .claude/skills/
 .claude/*

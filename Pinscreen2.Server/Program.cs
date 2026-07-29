@@ -214,6 +214,22 @@ app.MapGet("/", () =>
     return Results.Content(r.ReadToEnd(), "text/html; charset=utf-8");
 });
 
+// Also what a browser app-mode window uses for its taskbar icon.
+byte[]? faviconBytes = null;
+app.MapGet("/favicon.ico", () =>
+{
+    if (faviconBytes == null)
+    {
+        using var s = Assembly.GetExecutingAssembly()
+            .GetManifestResourceStream("Pinscreen2.Server.favicon.ico");
+        if (s == null) return Results.NotFound();
+        using var ms = new MemoryStream();
+        s.CopyTo(ms);
+        faviconBytes = ms.ToArray();
+    }
+    return Results.Bytes(faviconBytes, "image/x-icon");
+});
+
 app.Run();
 GC.KeepAlive(refreshTimer);
 return 0;

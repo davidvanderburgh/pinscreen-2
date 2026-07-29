@@ -31,8 +31,9 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-; Install for all users into Program Files. The app is updated by re-running a
-; new installer .exe -- there is no in-app self-update flow.
+; Install for all users into Program Files. The app's "Check for Updates" runs
+; this installer silently over the top (see UpdateService.cs), which is why the
+; install directory must stay stable across versions.
 PrivilegesRequired=admin
 WizardStyle=modern
 DisableProgramGroupPage=auto
@@ -59,6 +60,15 @@ Name: "{userstartup}\Pinscreen 2"; Filename: "{app}\Pinscreen2.App.exe"; Working
 
 [Run]
 Filename: "{app}\Pinscreen2.App.exe"; Description: "Launch Pinscreen 2"; Flags: nowait postinstall skipifsilent
+; Silent in-app updates skip the postinstall entry above, so the kiosk would be
+; left with nothing on screen. /RELAUNCH=1 restarts it.
+Filename: "{app}\Pinscreen2.App.exe"; WorkingDir: "{app}"; Flags: nowait; Check: ShouldRelaunch
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
+
+[Code]
+function ShouldRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;

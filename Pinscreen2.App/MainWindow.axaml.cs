@@ -765,50 +765,26 @@ public partial class MainWindow : Window
 
     private async void OnCheckUpdatesClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        // Lightweight version check: ask GitHub for the latest release, compare
-        // to the running version, and display the result. No download, no
-        // self-update -- the user installs the new version themselves from the
-        // releases page (matches the jjp-asset-decryptor pattern).
         string current = FormatVersion(GetLocalVersion());
         string releasesUrl = $"https://github.com/{GitHubUpdateRepo}/releases";
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("Pinscreen2-UpdateCheck");
-            http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+            var info = await UpdateService.CheckAsync(GetLocalVersion());
+            string latestDisplay = info.Latest != null
+                ? FormatVersion(info.Latest)
+                : (string.IsNullOrWhiteSpace(info.Tag) ? "(unknown)" : info.Tag);
 
-            using var resp = await http.GetAsync($"https://api.github.com/repos/{GitHubUpdateRepo}/releases/latest");
-            if (!resp.IsSuccessStatusCode)
+            if (!info.IsNewer)
             {
                 await ShowMessageAsync(
-                    $"Update check failed: {(int)resp.StatusCode} {resp.ReasonPhrase}\n\n" +
+                    (info.Latest != null && info.Current != null ? "You're up to date." : $"Latest release: {latestDisplay}") +
+                    "\n\n" +
                     $"Current version: {current}\n" +
-                    $"Releases: {releasesUrl}");
+                    $"Latest version:  {latestDisplay}");
                 return;
             }
-            var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync()).RootElement;
-            var tag = doc.TryGetProperty("tag_name", out var t) ? (t.GetString() ?? "") : "";
-            var name = doc.TryGetProperty("name", out var n) ? (n.GetString() ?? "") : "";
-            var htmlUrl = doc.TryGetProperty("html_url", out var u) ? (u.GetString() ?? releasesUrl) : releasesUrl;
-            var publishedAt = doc.TryGetProperty("published_at", out var p) ? (p.GetString() ?? "") : "";
 
-            var latest = ParseVersion(tag);
-            var local = GetLocalVersion();
-            string latestDisplay = latest != null ? FormatVersion(latest) : (string.IsNullOrWhiteSpace(tag) ? "(unknown)" : tag);
-            string verdict;
-            if (latest != null && local != null && latest > local)
-                verdict = $"Update available: {latestDisplay}";
-            else if (latest != null && local != null && latest <= local)
-                verdict = "You're up to date.";
-            else
-                verdict = $"Latest release: {latestDisplay}";
-
-            var msg = verdict + "\n\n" +
-                      $"Current version: {current}\n" +
-                      $"Latest version:  {latestDisplay}" +
-                      (string.IsNullOrWhiteSpace(name) || name == tag ? "" : $"  ({name})") + "\n" +
-                      (string.IsNullOrWhiteSpace(publishedAt) ? "" : $"Published:       {publishedAt}\n");
-            await ShowMessageAsync(msg, htmlUrl);
+            await ShowUpdateDialogAsync(info, current, latestDisplay, releasesUrl);
         }
         catch (Exception ex)
         {
@@ -817,6 +793,155 @@ public partial class MainWindow : Window
                 $"Current version: {current}",
                 releasesUrl);
         }
+    }
+
+    /// <summary>
+    /// Offers the update as one click: download the installer and run it
+    /// silently. These are wall-mounted kiosks, often without a keyboard, so
+    /// the old hand-off to a browser (save, dismiss SmartScreen, click through
+    /// a wizard, relaunch by hand) was the worst possible place to land.
+    /// </summary>
+    private async Task ShowUpdateDialogAsync(UpdateInfo info, string current, string latestDisplay, string releasesUrl)
+    {
+        var prevSuppress = _suppressOverlayOpen;
+        _suppressOverlayOpen = true;
+        try { if (OverlayPopup != null) OverlayPopup.IsOpen = false; } catch { }
+
+        var header = $"Update available: {latestDisplay}\n\n" +
+                     $"Current version: {current}\n" +
+                     $"Latest version:  {latestDisplay}" +
+                     (string.IsNullOrWhiteSpace(info.ReleaseName) || info.ReleaseName == info.Tag
+                         ? "" : $"  ({info.ReleaseName})") + "\n" +
+                     (string.IsNullOrWhiteSpace(info.PublishedAt) ? "" : $"Published:       {info.PublishedAt}\n") +
+                     (info.Installer != null
+                         ? $"Download size:   {UpdateService.FormatBytes(info.Installer.Size)}\n"
+                         : "\nNo installer is available for this platform yet.\n");
+
+        var body = new TextBlock
+        {
+            Text = header,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = Brushes.White,
+            FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+        };
+        var status = new TextBlock
+        {
+            Text = string.Empty,
+            IsVisible = false,
+            Margin = new Thickness(0, 8, 0, 0),
+            Foreground = Brushes.White,
+            FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+        };
+        var bar = new ProgressBar { Minimum = 0, Maximum = 100, Height = 6, IsVisible = false, Margin = new Thickness(0, 8, 0, 0) };
+
+        var installBtn = new Button { Content = "Install update", Foreground = Brushes.White, IsVisible = info.CanSelfInstall };
+        var browserBtn = new Button { Content = "Open in browser", Foreground = Brushes.White };
+        var closeBtn = new Button { Content = info.CanSelfInstall ? "Later" : "OK", Foreground = Brushes.White };
+
+        var buttonBar = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Spacing = 8,
+            Margin = new Thickness(0, 12, 0, 0),
+            Children = { installBtn, browserBtn, closeBtn },
+        };
+
+        var dlg = new Window
+        {
+            Width = 640,
+            Title = "Pinscreen 2",
+            CanResize = true,
+            Topmost = true,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            SizeToContent = SizeToContent.Height,
+            MinHeight = 200,
+            MaxHeight = 600,
+            Background = Brushes.Black,
+            Content = new DockPanel
+            {
+                Margin = new Thickness(16),
+                Children =
+                {
+                    new DockPanel { [DockPanel.DockProperty] = Dock.Bottom, Children = { buttonBar } },
+                    new StackPanel { [DockPanel.DockProperty] = Dock.Bottom, Children = { bar, status } },
+                    new ScrollViewer
+                    {
+                        HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+                        VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                        Content = body,
+                    },
+                },
+            },
+        };
+
+        closeBtn.Click += (_, __) => dlg.Close();
+        browserBtn.Click += (_, __) =>
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = string.IsNullOrWhiteSpace(info.HtmlUrl) ? releasesUrl : info.HtmlUrl,
+                    UseShellExecute = true,
+                });
+            }
+            catch { }
+        };
+
+        installBtn.Click += async (_, __) =>
+        {
+            if (info.Installer == null) return;
+            installBtn.IsEnabled = false;
+            browserBtn.IsEnabled = false;
+            closeBtn.IsEnabled = false;
+            bar.IsVisible = true;
+            status.IsVisible = true;
+            status.Text = "Starting download…";
+
+            try
+            {
+                var progress = new Progress<(long done, long total)>(p =>
+                {
+                    if (p.total > 0)
+                    {
+                        bar.IsIndeterminate = false;
+                        bar.Value = 100.0 * p.done / p.total;
+                        status.Text = $"Downloading… {UpdateService.FormatBytes(p.done)} of {UpdateService.FormatBytes(p.total)}";
+                    }
+                    else
+                    {
+                        bar.IsIndeterminate = true;
+                        status.Text = $"Downloading… {UpdateService.FormatBytes(p.done)}";
+                    }
+                });
+
+                var path = await UpdateService.DownloadAsync(info.Installer, progress);
+
+                bar.IsIndeterminate = true;
+                status.Text = "Starting installer… the app will close and reopen.";
+                UpdateService.LaunchInstaller(path);
+
+                // Give Setup a moment to take hold, then get out of its way so
+                // it can replace our files without a forced close.
+                await Task.Delay(1500);
+                dlg.Close();
+                Close();
+            }
+            catch (Exception ex)
+            {
+                bar.IsVisible = false;
+                bar.IsIndeterminate = false;
+                status.Text = $"Update failed: {ex.Message}";
+                installBtn.IsEnabled = true;
+                browserBtn.IsEnabled = true;
+                closeBtn.IsEnabled = true;
+            }
+        };
+
+        try { await dlg.ShowDialog(this); }
+        finally { _suppressOverlayOpen = prevSuppress; }
     }
 
     private async void OnPreviewQueueClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

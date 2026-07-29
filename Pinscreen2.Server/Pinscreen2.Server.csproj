@@ -10,5 +10,6 @@
   <ItemGroup>
     <!-- Embedded so a self-contained single-file publish stays one file. -->
     <EmbeddedResource Include="index.html" LogicalName="Pinscreen2.Server.index.html" />
+    <EmbeddedResource Include="favicon.ico" LogicalName="Pinscreen2.Server.favicon.ico" />
   </ItemGroup>
 </Project>
