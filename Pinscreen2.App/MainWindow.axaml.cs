@@ -50,6 +50,11 @@ public partial class MainWindow : Window
     private string _syncTargetFolder = string.Empty;
     private int _pendingCheckBusy;
     private DispatcherTimer? _pendingTimer;
+    private DateTimeOffset? _lastPendingCheck;
+    private Dictionary<string, long>? _localFiles;
+    // Reconnects can arrive in bursts (a run of server deploys). One diff per
+    // window is plenty; the 15-minute timer and post-sync force cover the rest.
+    private static readonly TimeSpan MinPendingCheckInterval = TimeSpan.FromMinutes(5);
     private int _clockReplacements;
     private string _lastDisplayGeometry = string.Empty;
     private DateTimeOffset? _lastResolutionChangeAt;
@@ -1459,24 +1464,46 @@ public partial class MainWindow : Window
         UpdateClock();
     }
 
+    private double _screenWidth, _screenHeight, _screenScaling;
+    private double _lastClientWidth = double.NaN, _lastClientHeight = double.NaN;
+    private DateTimeOffset _screenInfoAt;
+    private static readonly TimeSpan ScreenInfoMaxAge = TimeSpan.FromSeconds(10);
+
     private DisplayGeometry _lastGeometry;
     private DisplayGeometry _pendingGeometry;
     private bool _geometryTracked;
 
     private DisplayGeometry CurrentGeometry()
     {
-        double sw = 0, sh = 0, scaling = 0;
-        try
+        // Screens.ScreenFromWindow enumerates monitors through Win32. Cheap
+        // normally, but this runs on the UI thread of a kiosk with a known-flaky
+        // display driver, so don't do it every single second -- refresh the
+        // cached value on an interval, or immediately when the window itself
+        // reports a change (which is the case that matters anyway).
+        double cwNow = 0, chNow = 0;
+        try { cwNow = ClientSize.Width; chNow = ClientSize.Height; } catch { }
+
+        var windowChanged = Math.Abs(cwNow - _lastClientWidth) > 0.5 || Math.Abs(chNow - _lastClientHeight) > 0.5;
+        var stale = DateTimeOffset.UtcNow - _screenInfoAt > ScreenInfoMaxAge;
+        if (windowChanged || stale || _screenInfoAt == default)
         {
-            var screen = Screens?.ScreenFromWindow(this);
-            if (screen != null)
+            _lastClientWidth = cwNow;
+            _lastClientHeight = chNow;
+            try
             {
-                sw = screen.Bounds.Width;
-                sh = screen.Bounds.Height;
-                scaling = screen.Scaling;
+                var screen = Screens?.ScreenFromWindow(this);
+                if (screen != null)
+                {
+                    _screenWidth = screen.Bounds.Width;
+                    _screenHeight = screen.Bounds.Height;
+                    _screenScaling = screen.Scaling;
+                }
             }
+            catch { }
+            _screenInfoAt = DateTimeOffset.UtcNow;
         }
-        catch { }
+
+        double sw = _screenWidth, sh = _screenHeight, scaling = _screenScaling;
 
         double cw = 0, ch = 0;
         try { cw = ClientSize.Width; ch = ClientSize.Height; } catch { }
@@ -1958,6 +1985,7 @@ public partial class MainWindow : Window
 
         _libraryFileCount = collected.Count;
         _libraryBytes = collected.Sum(c => c.Size);
+        RebuildLocalFileIndex(collected);
 
         // Build the final order. Replaces the previous deterministic
         // round-robin (which produced a noticeable "always the same pattern"
@@ -2376,23 +2404,67 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Relative-path -> size index of what this screen already has, taken from
+    /// the library scan we do anyway. Lets the pending diff run without touching
+    /// the disk at all.
+    /// </summary>
+    private void RebuildLocalFileIndex(List<(string Path, long Size)> collected)
+    {
+        try
+        {
+            var root = _syncTargetFolder;
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                var first = _config.MediaFolders.FirstOrDefault();
+                root = string.IsNullOrWhiteSpace(first) ? null : ResolveFolderPath(first!);
+            }
+            if (string.IsNullOrWhiteSpace(root)) { _localFiles = null; return; }
+
+            var index = new Dictionary<string, long>(collected.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var (path, size) in collected)
+            {
+                try
+                {
+                    var rel = Path.GetRelativePath(root!, path).Replace('\\', '/');
+                    if (rel.StartsWith("..", StringComparison.Ordinal)) continue; // outside the sync root
+                    index[rel] = size;
+                }
+                catch { }
+            }
+            _localFiles = index;
+        }
+        catch { _localFiles = null; }
+    }
+
+    /// <summary>
     /// Diffs this screen against the server and reports the result, so the
     /// dashboard can say whether a sync is needed before anyone presses Sync.
-    /// Runs off the UI thread -- it stats every file in the manifest.
+    ///
+    /// Rate-limited on purpose. This used to run on every SSE reconnect, and a
+    /// run of server deploys turned that into repeated 36k-file disk scans on a
+    /// live pinscreen -- which starved VLC of I/O and hung the UI thread.
     /// </summary>
-    private async Task RefreshPendingAsync()
+    private async Task RefreshPendingAsync(bool force = false)
     {
         var agent = _agent;
         if (agent == null || string.IsNullOrWhiteSpace(_config.RemoteLibraryUrl)) return;
         // A diff taken mid-sync is stale the moment it is computed.
         if (_isSyncing) return;
+
+        if (!force && _lastPendingCheck != null &&
+            DateTimeOffset.UtcNow - _lastPendingCheck.Value < MinPendingCheckInterval)
+        {
+            return;
+        }
         if (Interlocked.Exchange(ref _pendingCheckBusy, 1) == 1) return;
 
         try
         {
+            _lastPendingCheck = DateTimeOffset.UtcNow;
             EnsureRemoteClient();
             var client = _remoteClient!;
-            var summary = await Task.Run(() => client.ComputePendingAsync());
+            var known = _localFiles;
+            var summary = await Task.Run(() => client.ComputePendingAsync(known));
 
             var report = BuildStatusReport();
             report.PendingFiles = summary.Files;
@@ -2453,7 +2525,8 @@ public partial class MainWindow : Window
             result.FilesFailed,
             result.Pending.Select(g => g.Name).Take(20).ToList());
 
-        _ = agent.ReportAsync(report).ContinueWith(_ => RefreshPendingAsync(), TaskScheduler.Default);
+        // Force: the whole point is that the numbers just changed.
+        _ = agent.ReportAsync(report).ContinueWith(_ => RefreshPendingAsync(force: true), TaskScheduler.Default);
     }
 
     /// <summary>

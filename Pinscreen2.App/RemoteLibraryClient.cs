@@ -108,22 +108,38 @@ public class RemoteLibraryClient
     public record PendingSummary(int Files, long Bytes, List<PendingGame> Games);
 
     /// <summary>
-    /// Diffs the server manifest against the local cache without fetching
-    /// anything, so the dashboard can answer "does this screen need a sync?"
-    /// before anyone presses the button. Comparing total counts alone can't:
-    /// two libraries of equal size are not necessarily the same library.
+    /// Diffs the server manifest against what this screen already has, so the
+    /// dashboard can answer "does this screen need a sync?" before anyone
+    /// presses the button. Comparing total counts alone can't: two libraries of
+    /// equal size are not necessarily the same library.
     ///
-    /// Costs one manifest fetch (cached server-side) plus a stat per entry, so
-    /// callers should run it on a background thread and not on a fast timer.
+    /// <paramref name="knownLocal"/> is a relative-path -> size map from the
+    /// last library scan. Pass it. Without it this falls back to stat-ing every
+    /// manifest entry, which on a 36k-file library is ~72,000 disk metadata
+    /// calls against the very drive VLC is streaming video from -- that starved
+    /// playback and hung the UI thread on a live pinscreen, because the clock
+    /// timer does its own File.Exists every second and queued behind the storm.
     /// </summary>
-    public async Task<PendingSummary> ComputePendingAsync(CancellationToken ct = default)
+    public async Task<PendingSummary> ComputePendingAsync(
+        IReadOnlyDictionary<string, long>? knownLocal = null, CancellationToken ct = default)
     {
         var manifest = await FetchManifestAsync(ct);
         var missing = new List<RemoteFile>();
         foreach (var f in manifest)
         {
             ct.ThrowIfCancellationRequested();
-            if (!IsCached(f.Path, f.Size)) missing.Add(f);
+            bool have;
+            if (knownLocal != null)
+            {
+                // Size must match too: a truncated or partially-written file is
+                // present but not usable, and sync replaces it on that basis.
+                have = knownLocal.TryGetValue(f.Path, out var size) && (f.Size <= 0 || size == f.Size);
+            }
+            else
+            {
+                have = IsCached(f.Path, f.Size);
+            }
+            if (!have) missing.Add(f);
         }
 
         var games = missing
