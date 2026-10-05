@@ -102,6 +102,24 @@ else {
     $lnk.Description = 'Pinscreen 2 library server (watchdog: relaunches on crash)'
     $lnk.Save()
 
+    # Task Manager's Startup-apps toggle lives in StartupApproved, keyed by the
+    # shortcut's file name -- not stored in the shortcut -- so rewriting the .lnk
+    # does not clear it. A "Disabled" set on 2026-04-27 against the old
+    # launch-once shortcut carried straight over to this watchdog: the server
+    # never started at login again and was down from 2026-08-05 until 2026-10-04.
+    # Running this script is an explicit request to start at login, so clear it.
+    $approvedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder'
+    $approved = (Get-ItemProperty $approvedKey -ErrorAction SilentlyContinue).'Pinscreen2 Server.lnk'
+    if ($approved -and ($approved[0] -band 1)) {   # low bit set = disabled (03, 07)
+        $since = 'an unknown date'
+        if ($approved.Length -ge 12 -and [BitConverter]::ToInt64($approved, 4) -gt 0) {
+            $since = [DateTime]::FromFileTime([BitConverter]::ToInt64($approved, 4)).ToString('yyyy-MM-dd HH:mm')
+        }
+        Set-ItemProperty $approvedKey -Name 'Pinscreen2 Server.lnk' -Type Binary `
+            -Value ([byte[]](2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        Write-Warning "The Startup entry had been disabled in Task Manager since $since. Re-enabled it."
+    }
+
     if (-not (Get-Process -Name 'Pinscreen2.Server' -ErrorAction SilentlyContinue)) {
         Start-Process "$env:SystemRoot\System32\wscript.exe" -ArgumentList "`"$vbsPath`"" -WorkingDirectory $InstallDir
     }

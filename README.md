@@ -129,6 +129,12 @@ The watchdog is `scripts/start-server.vbs`: a hidden `wscript` loop that
 relaunches the exe whenever it exits. The server writes its own rolling
 `server.log` (5 MB, one prior generation kept) next to the exe.
 
+A watchdog only helps if it is launched. Task Manager's **Startup apps** toggle
+is stored per shortcut *file name*, so disabling an older "Pinscreen2 Server"
+shortcut also disables any later one with that name. That happened here: the
+server stayed down from 2026-08-05 until 2026-10-04 with nothing in the log.
+`install-server.ps1` now re-enables a disabled entry and warns when it does.
+
 ### System tray
 
 The server puts an icon in the notification area of the machine it runs on.
