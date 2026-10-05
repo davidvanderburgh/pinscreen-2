@@ -16,7 +16,11 @@ public record GameSummary(string Name, int Files, long Bytes);
 /// </summary>
 public class LibraryService
 {
-    private static readonly string[] VideoExts = { ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm" };
+    // Keep in sync with HasVideoExtension in the app: a file the manifest lists
+    // but the app does not recognise is downloaded and then never played.
+    // .ogv is Theora, the native format of Godot-based games (Dune, Labyrinth,
+    // Bon Jovi...); .flv turns up in older extractions. VLC plays both.
+    private static readonly string[] VideoExts = { ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".ogv", ".flv" };
 
     private readonly string _root;
     private readonly object _lock = new();

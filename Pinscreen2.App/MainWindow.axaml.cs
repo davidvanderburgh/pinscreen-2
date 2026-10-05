@@ -2746,7 +2746,8 @@ public partial class MainWindow : Window
     private static bool HasVideoExtension(string path)
     {
         var ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext is ".mp4" or ".mov" or ".m4v" or ".mkv" or ".avi" or ".webm";
+        // Keep in sync with LibraryService.VideoExts on the server.
+        return ext is ".mp4" or ".mov" or ".m4v" or ".mkv" or ".avi" or ".webm" or ".ogv" or ".flv";
     }
 
     private void PlayNext()

@@ -70,7 +70,7 @@ Default (OS-agnostic) contents:
 
 Other optional fields (saved by the app): `ClockFontFamily`, `ClockColor`, `ClockXPercent`, `ClockYPercent`, `DelaySeconds`.
 
-Supported extensions: `.mp4`, `.mov`, `.m4v`, `.mkv`, `.avi`, `.webm`
+Supported extensions: `.mp4`, `.mov`, `.m4v`, `.mkv`, `.avi`, `.webm`, `.ogv`, `.flv`
 
 ## Remote library (sync)
 
