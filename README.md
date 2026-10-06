@@ -135,6 +135,13 @@ shortcut also disables any later one with that name. That happened here: the
 server stayed down from 2026-08-05 until 2026-10-04 with nothing in the log.
 `install-server.ps1` now re-enables a disabled entry and warns when it does.
 
+It also starts the watchdog through Explorer rather than as its own child.
+Terminals and agent hosts run their shells inside job objects that are torn down
+with them, and a child inherits its parent's job. A watchdog started from a
+Claude Code session died together with the server when that app restarted on
+2026-10-05, again with nothing in the log. Started through Explorer, it belongs
+to no job and only stops on logout.
+
 ### System tray
 
 The server puts an icon in the notification area of the machine it runs on.

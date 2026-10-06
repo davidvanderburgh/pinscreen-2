@@ -120,8 +120,14 @@ else {
         Write-Warning "The Startup entry had been disabled in Task Manager since $since. Re-enabled it."
     }
 
+    # Start it through Explorer, the way login does, never as our own child. A
+    # child inherits this shell's job object, and terminals and agent hosts put
+    # their shells in jobs that die with them: started from a Claude Code
+    # session, the watchdog and server were killed together, with nothing in the
+    # log, when that app restarted on 2026-10-05. Handing the shortcut to
+    # explorer.exe runs it from a COM-launched Explorer outside any job.
     if (-not (Get-Process -Name 'Pinscreen2.Server' -ErrorAction SilentlyContinue)) {
-        Start-Process "$env:SystemRoot\System32\wscript.exe" -ArgumentList "`"$vbsPath`"" -WorkingDirectory $InstallDir
+        Start-Process "$env:SystemRoot\explorer.exe" -ArgumentList "`"$($lnk.FullName)`""
     }
     Write-Host "Installed watchdog launcher and Startup shortcut." -ForegroundColor Green
 }
